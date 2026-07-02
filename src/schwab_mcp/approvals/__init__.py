@@ -12,6 +12,10 @@ from schwab_mcp.approvals.discord import (
     DiscordApprovalManager,
     DiscordApprovalSettings,
 )
+from schwab_mcp.approvals.telegram import (
+    TelegramApprovalManager,
+    TelegramApprovalSettings,
+)
 
 __all__ = [
     "ApprovalDecision",
@@ -20,4 +24,6 @@ __all__ = [
     "NoOpApprovalManager",
     "DiscordApprovalManager",
     "DiscordApprovalSettings",
+    "TelegramApprovalManager",
+    "TelegramApprovalSettings",
 ]

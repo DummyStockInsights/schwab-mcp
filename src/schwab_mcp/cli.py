@@ -12,6 +12,8 @@ from schwab_mcp.approvals import (
     DiscordApprovalManager,
     DiscordApprovalSettings,
     NoOpApprovalManager,
+    TelegramApprovalManager,
+    TelegramApprovalSettings,
 )
 from schwab_mcp.server import SchwabMCPServer, send_error_response
 
@@ -179,6 +181,32 @@ def auth(
     help="Seconds to wait for Discord approval before timing out.",
 )
 @click.option(
+    "--telegram-token",
+    type=str,
+    envvar="SCHWAB_MCP_TELEGRAM_TOKEN",
+    help="Telegram bot token used for approval prompts.",
+)
+@click.option(
+    "--telegram-chat-id",
+    type=int,
+    envvar="SCHWAB_MCP_TELEGRAM_CHAT_ID",
+    help="Telegram chat ID where approval requests are posted.",
+)
+@click.option(
+    "--telegram-approver",
+    type=str,
+    multiple=True,
+    help="Telegram user ID allowed to approve or deny requests. Pass multiple times for several reviewers.",
+)
+@click.option(
+    "--telegram-timeout",
+    type=int,
+    default=600,
+    show_default=True,
+    envvar="SCHWAB_MCP_TELEGRAM_TIMEOUT",
+    help="Seconds to wait for Telegram approval before timing out.",
+)
+@click.option(
     "--json",
     "json_output",
     default=False,
@@ -196,6 +224,10 @@ def server(
     discord_channel_id: int | None,
     discord_approver: tuple[str, ...],
     discord_timeout: int,
+    telegram_token: str | None,
+    telegram_chat_id: int | None,
+    telegram_approver: tuple[str, ...],
+    telegram_timeout: int,
     no_technical_tools: bool,
     json_output: bool,
 ) -> int:
@@ -266,6 +298,16 @@ def server(
             if env_approvers:
                 approver_values = tuple(value.strip() for value in env_approvers.split(",") if value.strip())
 
+        telegram_approver_values: tuple[str, ...] = telegram_approver
+        if not telegram_approver_values:
+            env_telegram_approvers = os.getenv("SCHWAB_MCP_TELEGRAM_APPROVERS")
+            if env_telegram_approvers:
+                telegram_approver_values = tuple(
+                    value.strip()
+                    for value in env_telegram_approvers.split(",")
+                    if value.strip()
+                )
+
         discord_requested = any(
             (
                 discord_token,
@@ -273,11 +315,24 @@ def server(
                 approver_values,
             )
         )
+        telegram_requested = any(
+            (
+                telegram_token,
+                telegram_chat_id,
+                telegram_approver_values,
+            )
+        )
         allow_write = False
 
         if jesus_take_the_wheel:
             approval_manager = NoOpApprovalManager()
             allow_write = True
+        elif discord_requested and telegram_requested:
+            send_error_response(
+                "Configure only one approval backend (Discord or Telegram), not both.",
+                code=400,
+            )
+            return 1
         elif discord_requested:
             if not discord_token or not discord_channel_id:
                 send_error_response(
@@ -308,11 +363,46 @@ def server(
             )
             approval_manager = DiscordApprovalManager(settings)
             allow_write = True
+        elif telegram_requested:
+            if not telegram_token or not telegram_chat_id:
+                send_error_response(
+                    "Telegram approval configuration is required to enable write tools.",
+                    code=400,
+                    details={
+                        "missing_token": not bool(telegram_token),
+                        "missing_chat_id": not bool(telegram_chat_id),
+                    },
+                )
+                return 1
+
+            telegram_approver_ids = TelegramApprovalManager.authorized_user_ids(
+                [int(value) for value in telegram_approver_values]
+                if telegram_approver_values
+                else None
+            )
+            if not telegram_approver_ids:
+                send_error_response(
+                    "Telegram approver list cannot be empty. Configure at least one reviewer.",
+                    code=400,
+                    details={"approver_source": "flags_or_env"},
+                )
+                return 1
+            telegram_settings = TelegramApprovalSettings(
+                token=telegram_token,
+                chat_id=telegram_chat_id,
+                approver_ids=telegram_approver_ids,
+                timeout_seconds=float(telegram_timeout),
+            )
+            approval_manager = TelegramApprovalManager(telegram_settings)
+            allow_write = True
         else:
             approval_manager = NoOpApprovalManager()
 
-        if jesus_take_the_wheel and discord_token:
-            click.echo("Warning: --jesus-take-the-wheel bypasses Discord approvals.", err=True)
+        if jesus_take_the_wheel and (discord_token or telegram_token):
+            click.echo(
+                "Warning: --jesus-take-the-wheel bypasses Discord/Telegram approvals.",
+                err=True,
+            )
 
         server = SchwabMCPServer(
             APP_NAME,

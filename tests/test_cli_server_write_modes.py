@@ -42,6 +42,26 @@ class DummyDiscordApprovalManager(ApprovalManager):
         return frozenset(int(value) for value in users)
 
 
+class DummyTelegramApprovalManager(ApprovalManager):
+    def __init__(self, settings) -> None:
+        self.settings = settings
+
+    async def require(self, request: ApprovalRequest) -> ApprovalDecision:  # noqa: ARG002
+        return ApprovalDecision.APPROVED
+
+    async def start(self) -> None:
+        return None
+
+    async def stop(self) -> None:
+        return None
+
+    @staticmethod
+    def authorized_user_ids(users):
+        if not users:
+            return frozenset()
+        return frozenset(int(value) for value in users)
+
+
 def _patch_common(monkeypatch, captured: dict[str, Any]) -> None:
     monkeypatch.setattr(cli, "AsyncClient", FakeAsyncClient)
 
@@ -159,6 +179,72 @@ def test_server_enables_write_mode_with_discord(monkeypatch):
     assert isinstance(captured["approval_manager"], DummyDiscordApprovalManager)
     assert captured["easy_client_kwargs"]["max_token_age"] == cli.TOKEN_MAX_AGE_SECONDS
     assert captured["use_json"] is False
+
+
+def test_server_enables_write_mode_with_telegram(monkeypatch):
+    captured: dict[str, Any] = {}
+    _patch_common(monkeypatch, captured)
+    monkeypatch.setattr(cli, "TelegramApprovalManager", DummyTelegramApprovalManager)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli.cli,
+        [
+            "server",
+            "--client-id",
+            "client",
+            "--client-secret",
+            "secret",
+            "--telegram-token",
+            "token",
+            "--telegram-chat-id",
+            "123",
+            "--telegram-approver",
+            "456",
+        ],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0
+    assert captured["allow_write"] is True
+    assert isinstance(captured["approval_manager"], DummyTelegramApprovalManager)
+    assert captured["easy_client_kwargs"]["max_token_age"] == cli.TOKEN_MAX_AGE_SECONDS
+    assert captured["use_json"] is False
+
+
+def test_server_rejects_both_discord_and_telegram(monkeypatch):
+    captured: dict[str, Any] = {}
+    _patch_common(monkeypatch, captured)
+    monkeypatch.setattr(cli, "DiscordApprovalManager", DummyDiscordApprovalManager)
+    monkeypatch.setattr(cli, "TelegramApprovalManager", DummyTelegramApprovalManager)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli.cli,
+        [
+            "server",
+            "--client-id",
+            "client",
+            "--client-secret",
+            "secret",
+            "--discord-token",
+            "token",
+            "--discord-channel-id",
+            "123",
+            "--discord-approver",
+            "456",
+            "--telegram-token",
+            "token",
+            "--telegram-chat-id",
+            "123",
+            "--telegram-approver",
+            "456",
+        ],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 1
+    assert "run_called" not in captured
 
 
 def test_server_json_flag_enables_json_output(monkeypatch):

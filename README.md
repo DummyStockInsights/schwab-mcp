@@ -7,7 +7,7 @@ The **Schwab Model Context Protocol (MCP) Server** connects your Schwab account 
 *   **Market Data**: Real-time quotes, price history, option chains, and market movers.
 *   **Account Management**: View balances, positions, and transactions.
 *   **Trading**: comprehensive support for equities and options, including complex strategies (OCO, Bracket).
-*   **Safety First**: Critical actions (like trading) are gated behind a **Discord approval workflow** by default.
+*   **Safety First**: Critical actions (like trading) are gated behind a **Discord or Telegram approval workflow** by default.
 *   **LLM Integration**: Designed specifically for Agentic AI workflows.
 
 ## Quick Start
@@ -59,9 +59,17 @@ schwab-mcp server \
   --discord-token BOT_TOKEN \
   --discord-channel-id CHANNEL_ID \
   --discord-approver YOUR_USER_ID
+
+# With Trading Enabled (Requires Telegram Approval)
+schwab-mcp server \
+  --client-id YOUR_KEY \
+  --client-secret YOUR_SECRET \
+  --telegram-token BOT_TOKEN \
+  --telegram-chat-id CHAT_ID \
+  --telegram-approver YOUR_USER_ID
 ```
 
-> **Note**: For trading capabilities, you must set up a Discord bot for approvals. See [Discord Setup Guide](docs/discord-setup.md).
+> **Note**: For trading capabilities, you must set up an approval backend. See the [Discord Setup Guide](docs/discord-setup.md) or the [Telegram Setup Guide](docs/telegram-setup.md). Configure only one backend at a time.
 
 ## Configuration
 
@@ -73,7 +81,7 @@ You can configure the server using CLI flags or Environment Variables.
 | `--client-secret` | `SCHWAB_CLIENT_SECRET` | **Required**. Schwab App Secret. |
 | `--callback-url` | `SCHWAB_CALLBACK_URL` | Redirect URL (default: `https://127.0.0.1:8182`). |
 | `--token-path` | N/A | Path to save/load token (default: `~/.local/share/...`). |
-| `--jesus-take-the-wheel`| N/A | **DANGER**. Bypasses Discord approval for trades. |
+| `--jesus-take-the-wheel`| N/A | **DANGER**. Bypasses Discord/Telegram approval for trades. |
 | `--no-technical-tools` | N/A | Disables technical analysis tools (SMA, RSI, etc.). |
 | `--json` | N/A | Returns JSON instead of formatted text (useful for some agents). Null/empty fields are stripped to reduce token usage. |
 
