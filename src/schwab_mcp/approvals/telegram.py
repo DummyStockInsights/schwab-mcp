@@ -216,17 +216,16 @@ class TelegramApprovalManager(ApprovalManager):
     def _build_pending_text(request: ApprovalRequest) -> str:
         lines = [
             "⚠️ Write operation requires approval",
-            f"Tool: {request.tool_name}",
-            f"Request ID: {request.request_id}",
-            f"Approval ID: {request.id}",
+            f"🔧 Tool: {request.tool_name}",
+            f"🆔 Request ID: {request.request_id}",
         ]
         if request.client_id:
-            lines.append(f"Client ID: {request.client_id}")
+            lines.append(f"💻 Client ID: {request.client_id}")
         if request.arguments:
-            lines.append("Arguments:")
+            lines.append("📋 Arguments:")
             lines.append(TelegramApprovalManager._format_arguments(request.arguments))
         lines.append("")
-        lines.append("Tap a button below to approve or deny.")
+        lines.append("👉 Tap a button below to approve or deny.")
         return "\n".join(lines)
 
     @staticmethod
@@ -240,27 +239,63 @@ class TelegramApprovalManager(ApprovalManager):
         emoji = TelegramApprovalManager._emoji_for_decision(decision)
         lines = [
             f"{emoji} Write operation {decision.value}",
-            f"Tool: {request.tool_name}",
-            f"Request ID: {request.request_id}",
-            f"Approval ID: {request.id}",
+            f"🔧 Tool: {request.tool_name}",
+            f"🆔 Request ID: {request.request_id}",
         ]
         if request.client_id:
-            lines.append(f"Client ID: {request.client_id}")
+            lines.append(f"💻 Client ID: {request.client_id}")
         if request.arguments:
-            lines.append("Arguments:")
+            lines.append("📋 Arguments:")
             lines.append(TelegramApprovalManager._format_arguments(request.arguments))
         if actor is not None:
-            lines.append(f"Actor: {actor.full_name} (ID: {actor.id})")
+            lines.append(f"👤 Actor: {actor.full_name} (ID: {actor.id})")
         if reason:
-            lines.append(f"Notes: {reason}")
+            lines.append(f"📝 Notes: {reason}")
         return "\n".join(lines)
+
+    # Argument keys that are internal identifiers, not useful for a human
+    # reviewer to see (long opaque hashes) — omitted from the approval message.
+    _HIDDEN_ARG_KEYS = frozenset({"account_hash"})
+
+    # Best-effort emoji per well-known order-tool argument key. Falls back to
+    # a plain bullet for anything not in this map.
+    _ARG_KEY_EMOJI = {
+        "symbol": "📈",
+        "quantity": "🔢",
+        "order_type": "🧾",
+        "price": "💵",
+        "stop_price": "🛑",
+        "session": "🕒",
+        "duration": "⏳",
+        "trail_offset": "🎯",
+        "trail_type": "🎯",
+    }
+
+    @staticmethod
+    def _emoji_for_argument(key: str, value: str) -> str:
+        if key == "instruction":
+            upper = value.upper()
+            if "SELL" in upper:
+                return "🔴"
+            if "BUY" in upper:
+                return "🟢"
+            return "↔️"
+        return TelegramApprovalManager._ARG_KEY_EMOJI.get(key, "•")
 
     @staticmethod
     def _format_arguments(arguments: Mapping[str, str]) -> str:
-        if not arguments:
+        visible = {
+            key: value
+            for key, value in arguments.items()
+            if key not in TelegramApprovalManager._HIDDEN_ARG_KEYS
+        }
+        if not visible:
             return "<none>"
 
-        lines = [f"{key} = {value}" for key, value in arguments.items()]
+        lines = [
+            f"  {TelegramApprovalManager._emoji_for_argument(key, value)} {key} = {value}"
+            for key, value in visible.items()
+        ]
         rendered = "\n".join(lines)
         if len(rendered) > 1000:
             return f"{rendered[:997]}..."
