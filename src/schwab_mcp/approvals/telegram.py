@@ -222,7 +222,7 @@ class TelegramApprovalManager(ApprovalManager):
         if request.client_id:
             lines.append(f"💻 Client ID: {request.client_id}")
         if request.arguments:
-            lines.append("📋 Arguments:")
+            lines.append("Arguments: 📋")
             lines.append(TelegramApprovalManager._format_arguments(request.arguments))
         lines.append("")
         lines.append("👉 Tap a button below to approve or deny.")
@@ -245,7 +245,7 @@ class TelegramApprovalManager(ApprovalManager):
         if request.client_id:
             lines.append(f"💻 Client ID: {request.client_id}")
         if request.arguments:
-            lines.append("📋 Arguments:")
+            lines.append("Arguments: 📋")
             lines.append(TelegramApprovalManager._format_arguments(request.arguments))
         if actor is not None:
             lines.append(f"👤 Actor: {actor.full_name} (ID: {actor.id})")
@@ -280,7 +280,7 @@ class TelegramApprovalManager(ApprovalManager):
             if "BUY" in upper:
                 return "🟢"
             return "↔️"
-        return TelegramApprovalManager._ARG_KEY_EMOJI.get(key, "•")
+        return TelegramApprovalManager._ARG_KEY_EMOJI.get(key, "")
 
     @staticmethod
     def _format_arguments(arguments: Mapping[str, str]) -> str:
@@ -292,10 +292,11 @@ class TelegramApprovalManager(ApprovalManager):
         if not visible:
             return "<none>"
 
-        lines = [
-            f"  {TelegramApprovalManager._emoji_for_argument(key, value)} {key} = {value}"
-            for key, value in visible.items()
-        ]
+        lines = []
+        for key, value in visible.items():
+            emoji = TelegramApprovalManager._emoji_for_argument(key, value)
+            suffix = f" {emoji}" if emoji else ""
+            lines.append(f"  • {key} = {value}{suffix}")
         rendered = "\n".join(lines)
         if len(rendered) > 1000:
             return f"{rendered[:997]}..."
