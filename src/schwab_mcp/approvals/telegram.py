@@ -3,14 +3,22 @@ from __future__ import annotations
 import asyncio
 import html
 import logging
+import re
 from dataclasses import dataclass
 from typing import Mapping, Sequence
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, User
 from telegram.error import TelegramError
-from telegram.ext import Application, CallbackQueryHandler, ContextTypes
+from telegram.ext import (
+    Application,
+    CallbackQueryHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
 
 from schwab_mcp.approvals.base import (
+    EDITABLE_ARGUMENT_TYPES,
     ApprovalDecision,
     ApprovalManager,
     ApprovalRequest,
@@ -21,6 +29,20 @@ logger = logging.getLogger(__name__)
 
 _APPROVE = "approve"
 _DENY = "deny"
+
+# Matches edit commands in replies, e.g. "qty 5", "quantity=5", "price: 1.95",
+# "数量 5 价格 1.95". Aliases map onto the canonical argument keys.
+_EDIT_PATTERN = re.compile(
+    r"(quantity|qty|price|数量|价格)\s*[=:]?\s*(\d+(?:\.\d+)?)",
+    re.IGNORECASE,
+)
+_EDIT_KEY_ALIASES = {
+    "qty": "quantity",
+    "quantity": "quantity",
+    "数量": "quantity",
+    "price": "price",
+    "价格": "price",
+}
 
 
 @dataclass(slots=True, frozen=True)
@@ -53,6 +75,9 @@ class TelegramApprovalManager(ApprovalManager):
         self._settings = settings
         self._application = Application.builder().token(settings.token).build()
         self._application.add_handler(CallbackQueryHandler(self._handle_callback))
+        self._application.add_handler(
+            MessageHandler(filters.TEXT & filters.REPLY, self._handle_reply)
+        )
 
         self._started = False
         self._start_lock = asyncio.Lock()
@@ -83,26 +108,28 @@ class TelegramApprovalManager(ApprovalManager):
             await self._application.shutdown()
             self._started = False
 
-    async def require(self, request: ApprovalRequest) -> ApprovalDecision:
-        await self.start()
-
-        keyboard = InlineKeyboardMarkup(
+    @staticmethod
+    def _build_keyboard(request_id: str) -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup(
             [
                 [
                     InlineKeyboardButton(
-                        "✅ Approve", callback_data=f"{_APPROVE}:{request.id}"
+                        "✅ Approve", callback_data=f"{_APPROVE}:{request_id}"
                     ),
                     InlineKeyboardButton(
-                        "❌ Deny", callback_data=f"{_DENY}:{request.id}"
+                        "❌ Deny", callback_data=f"{_DENY}:{request_id}"
                     ),
                 ]
             ]
         )
 
+    async def require(self, request: ApprovalRequest) -> ApprovalDecision:
+        await self.start()
+
         message = await self._application.bot.send_message(
             chat_id=self._settings.chat_id,
             text=self._build_pending_text(request),
-            reply_markup=keyboard,
+            reply_markup=self._build_keyboard(request.id),
             parse_mode="HTML",
         )
 
@@ -191,6 +218,112 @@ class TelegramApprovalManager(ApprovalManager):
         )
         pending.future.set_result(decision)
 
+    async def _handle_reply(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE  # noqa: ARG002
+    ) -> None:
+        message = update.message
+        if message is None or message.chat.id != self._settings.chat_id:
+            return
+        reply_to = message.reply_to_message
+        if reply_to is None:
+            return
+
+        user = message.from_user
+        if self._settings.approver_ids and (
+            user is None or user.id not in self._settings.approver_ids
+        ):
+            return
+
+        async with self._lock:
+            pending = next(
+                (
+                    p
+                    for p in self._pending.values()
+                    if p.message_id == reply_to.message_id
+                ),
+                None,
+            )
+        if pending is None:
+            return  # not a pending approval message (or already decided)
+
+        edits = self._parse_edit_text(message.text or "")
+        if not edits:
+            await message.reply_text(
+                 '无法识别修改指令。示例: "qty 5"、"price 1.95"、"qty 5 price 1.95"'
+            )
+            return
+
+        applied: list[str] = []
+        rejected: list[str] = []
+        for key, raw in edits.items():
+            ok, why = self._validate_override(pending.request, key, raw)
+            if ok:
+                original = pending.request.arguments.get(key, "?")
+                pending.request.overrides[key] = raw
+                applied.append(f"{key}: {original} → {raw}")
+            else:
+                rejected.append(f"{key}: {why}")
+
+        if applied:
+            await self._refresh_pending_message(pending)
+
+        lines = []
+        if applied:
+            lines.append("✏️ 已更新 " + ", ".join(applied))
+        if rejected:
+            lines.append("⚠️ 未采纳 " + "; ".join(rejected))
+        await message.reply_text("\n".join(lines))
+
+    @staticmethod
+    def _parse_edit_text(text: str) -> dict[str, str]:
+        edits: dict[str, str] = {}
+        for alias, value in _EDIT_PATTERN.findall(text):
+            key = _EDIT_KEY_ALIASES.get(alias.lower())
+            if key:
+                edits[key] = value
+        return edits
+
+    @staticmethod
+    def _validate_override(
+        request: ApprovalRequest, key: str, raw: str
+    ) -> tuple[bool, str]:
+        if key not in EDITABLE_ARGUMENT_TYPES:
+            return False, "not editable"
+        if key not in request.arguments:
+            return False, "not part of this order"
+        if key == "quantity":
+            try:
+                quantity = int(raw)
+            except ValueError:
+                return False, "quantity must be a whole number"
+            if quantity <= 0:
+                return False, "quantity must be positive"
+        elif key == "price":
+            if request.arguments.get("price") == "None":
+                return False, "this order has no price (market order)"
+            try:
+                price = float(raw)
+            except ValueError:
+                return False, "price must be a number"
+            if price <= 0:
+                return False, "price must be positive"
+        return True, ""
+
+    async def _refresh_pending_message(self, pending: _PendingApproval) -> None:
+        try:
+            await self._application.bot.edit_message_text(
+                chat_id=pending.chat_id,
+                message_id=pending.message_id,
+                text=self._build_pending_text(pending.request),
+                reply_markup=self._build_keyboard(pending.request.id),
+                parse_mode="HTML",
+            )
+        except TelegramError:
+            logger.warning(
+                "Failed to refresh Telegram approval message for request %s",
+                pending.request.id,
+            )
+
     async def _finalize_message(
         self,
         pending: _PendingApproval,
@@ -216,6 +349,17 @@ class TelegramApprovalManager(ApprovalManager):
             )
 
     @staticmethod
+    def _editable_keys(request: ApprovalRequest) -> list[str]:
+        keys = []
+        for key in EDITABLE_ARGUMENT_TYPES:
+            if key not in request.arguments:
+                continue
+            if key == "price" and request.arguments.get("price") == "None":
+                continue
+            keys.append(key)
+        return keys
+
+    @staticmethod
     def _build_pending_text(request: ApprovalRequest) -> str:
         lines = [
             "⚠️ Write operation requires approval",
@@ -226,7 +370,17 @@ class TelegramApprovalManager(ApprovalManager):
             lines.append(f"💻 Client ID: {html.escape(request.client_id)}")
         if request.arguments:
             lines.append("📋 Arguments:")
-            lines.append(TelegramApprovalManager._format_arguments(request.arguments))
+            lines.append(
+                TelegramApprovalManager._format_arguments(
+                    request.arguments, request.overrides
+                )
+            )
+        editable = TelegramApprovalManager._editable_keys(request)
+        if editable:
+            lines.append(
+                f"✏️ Reply to this message to adjust {'/'.join(editable)},"
+                ' e.g. "qty 5 price 1.95".'
+            )
         lines.append("")
         lines.append("👉 Tap a button below to approve or deny.")
         return "\n".join(lines)
@@ -249,7 +403,11 @@ class TelegramApprovalManager(ApprovalManager):
             lines.append(f"💻 Client ID: {html.escape(request.client_id)}")
         if request.arguments:
             lines.append("📋 Arguments:")
-            lines.append(TelegramApprovalManager._format_arguments(request.arguments))
+            lines.append(
+                TelegramApprovalManager._format_arguments(
+                    request.arguments, request.overrides
+                )
+            )
         if actor is not None:
             lines.append(
                 f"👤 Actor: {html.escape(actor.full_name)} (ID: {actor.id})"
@@ -288,8 +446,12 @@ class TelegramApprovalManager(ApprovalManager):
         return TelegramApprovalManager._ARG_KEY_EMOJI.get(key, "")
 
     @staticmethod
-    def _format_arguments(arguments: Mapping[str, str]) -> str:
+    def _format_arguments(
+        arguments: Mapping[str, str],
+        overrides: Mapping[str, str] | None = None,
+    ) -> str:
         """Render arguments as an aligned monospace table (HTML <pre> block)."""
+        overrides = overrides or {}
         visible = {
             key: value
             for key, value in arguments.items()
@@ -305,6 +467,8 @@ class TelegramApprovalManager(ApprovalManager):
             prefix = f"{emoji} " if emoji else ""
             if len(value) >= 2 and value[0] == value[-1] == "'":
                 value = value[1:-1]
+            if key in overrides:
+                value = f"{value} → {overrides[key]}"
             rows.append(f"{key.ljust(key_width)} │ {prefix}{value}")
         rendered = "\n".join(rows)
         if len(rendered) > 1000:

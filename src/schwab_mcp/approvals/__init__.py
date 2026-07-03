@@ -6,6 +6,7 @@ from schwab_mcp.approvals.base import (
     ApprovalDecision,
     ApprovalManager,
     ApprovalRequest,
+    EDITABLE_ARGUMENT_TYPES,
     NoOpApprovalManager,
 )
 from schwab_mcp.approvals.discord import (
@@ -21,6 +22,7 @@ __all__ = [
     "ApprovalDecision",
     "ApprovalManager",
     "ApprovalRequest",
+    "EDITABLE_ARGUMENT_TYPES",
     "NoOpApprovalManager",
     "DiscordApprovalManager",
     "DiscordApprovalSettings",

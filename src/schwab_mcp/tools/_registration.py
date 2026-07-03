@@ -14,7 +14,11 @@ from typing import Annotated, Any, Union, cast, get_args, get_origin, get_type_h
 from mcp.server.fastmcp import Context as MCPContext, FastMCP
 from mcp.types import ToolAnnotations
 
-from schwab_mcp.approvals import ApprovalDecision, ApprovalRequest
+from schwab_mcp.approvals import (
+    EDITABLE_ARGUMENT_TYPES,
+    ApprovalDecision,
+    ApprovalRequest,
+)
 from schwab_mcp.context import SchwabContext
 
 logger = logging.getLogger(__name__)
@@ -186,14 +190,28 @@ def _wrap_with_approval(func: ToolFn) -> ToolFn:
 
         decision = await run_approval(context, request)
         logger.info(
-            "Approval decision %s for tool '%s' (approval_id=%s, client_id=%s, request_id=%s)",
+            "Approval decision %s for tool '%s' (approval_id=%s, client_id=%s, request_id=%s, overrides=%s)",
             decision.value,
             func.__name__,
             request.id,
             request.client_id or "<unknown>",
             request.request_id,
+            request.overrides or "<none>",
         )
         if decision is ApprovalDecision.APPROVED:
+            for key, raw in request.overrides.items():
+                caster = EDITABLE_ARGUMENT_TYPES.get(key)
+                if caster is None or key not in bound.arguments:
+                    continue
+                try:
+                    bound.arguments[key] = caster(raw)
+                except (TypeError, ValueError):
+                    logger.warning(
+                        "Ignoring invalid reviewer override %s=%r for tool '%s'",
+                        key,
+                        raw,
+                        func.__name__,
+                    )
             result = func(*bound.args, **bound.kwargs)
             if inspect.isawaitable(result):
                 return await result

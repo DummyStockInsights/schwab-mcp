@@ -84,9 +84,33 @@ async def sample_write_tool(ctx: SchwabContext, symbol: str) -> str:
     return symbol.upper()
 
 
+async def sample_order_tool(
+    ctx: SchwabContext, symbol: str, quantity: int, price: float | None = None
+) -> dict:
+    return {"symbol": symbol, "quantity": quantity, "price": price}
+
+
 def wrapped_tool():
     ensured = _registration._ensure_schwab_context(sample_write_tool)
     return _registration._wrap_with_approval(ensured)
+
+
+def wrapped_order_tool():
+    ensured = _registration._ensure_schwab_context(sample_order_tool)
+    return _registration._wrap_with_approval(ensured)
+
+
+class OverridingApprovalManager(ApprovalManager):
+    """Approves every request after applying reviewer overrides."""
+
+    def __init__(self, overrides: dict[str, str]) -> None:
+        self.overrides = overrides
+        self.requests: list[ApprovalRequest] = []
+
+    async def require(self, request: ApprovalRequest) -> ApprovalDecision:
+        self.requests.append(request)
+        request.overrides.update(self.overrides)
+        return ApprovalDecision.APPROVED
 
 
 T = TypeVar("T")
@@ -162,6 +186,44 @@ def test_progress_notifications_emitted_when_supported() -> None:
     assert [entry["progress"] for entry in session.progress] == [0, 1]
     assert session.progress[0]["message"].startswith("Waiting for reviewer approval")
     assert session.progress[1]["message"].startswith("Reviewer approved")
+
+
+def make_ctx_with_manager(manager: ApprovalManager) -> SchwabContext:
+    lifespan_context = SchwabServerContext(
+        client=cast(AsyncClient, object()),
+        approval_manager=manager,
+    )
+    request_context = SimpleNamespace(
+        lifespan_context=lifespan_context,
+        request_id="req-123",
+        session=DummySession(),
+        meta=None,
+    )
+    return SchwabContext.model_construct(
+        _request_context=cast(Any, request_context),
+        _fastmcp=None,
+    )
+
+
+def test_write_tool_applies_reviewer_overrides() -> None:
+    manager = OverridingApprovalManager({"quantity": "5", "price": "1.95"})
+    ctx = make_ctx_with_manager(manager)
+    tool = wrapped_order_tool()
+
+    result = await_result(tool(ctx, "spy", 10, price=2.01))
+
+    assert result == {"symbol": "spy", "quantity": 5, "price": 1.95}
+    assert manager.requests[0].arguments["quantity"] == "10"
+
+
+def test_write_tool_ignores_invalid_reviewer_override() -> None:
+    manager = OverridingApprovalManager({"quantity": "not-a-number"})
+    ctx = make_ctx_with_manager(manager)
+    tool = wrapped_order_tool()
+
+    result = await_result(tool(ctx, "spy", 10, price=2.01))
+
+    assert result == {"symbol": "spy", "quantity": 10, "price": 2.01}
 
 
 def test_discord_manager_requires_approvers() -> None:
