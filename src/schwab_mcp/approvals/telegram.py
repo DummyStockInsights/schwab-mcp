@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
 from dataclasses import dataclass
 from typing import Mapping, Sequence
@@ -102,6 +103,7 @@ class TelegramApprovalManager(ApprovalManager):
             chat_id=self._settings.chat_id,
             text=self._build_pending_text(request),
             reply_markup=keyboard,
+            parse_mode="HTML",
         )
 
         future: asyncio.Future[ApprovalDecision] = (
@@ -205,6 +207,7 @@ class TelegramApprovalManager(ApprovalManager):
                 chat_id=pending.chat_id,
                 message_id=pending.message_id,
                 text=text,
+                parse_mode="HTML",
             )
         except TelegramError:
             logger.warning(
@@ -216,13 +219,13 @@ class TelegramApprovalManager(ApprovalManager):
     def _build_pending_text(request: ApprovalRequest) -> str:
         lines = [
             "⚠️ Write operation requires approval",
-            f"🔧 Tool: {request.tool_name}",
-            f"🆔 Request ID: {request.request_id}",
+            f"🔧 Tool: {html.escape(request.tool_name)}",
+            f"🆔 Request ID: {html.escape(request.request_id)}",
         ]
         if request.client_id:
-            lines.append(f"💻 Client ID: {request.client_id}")
+            lines.append(f"💻 Client ID: {html.escape(request.client_id)}")
         if request.arguments:
-            lines.append("Arguments: 📋")
+            lines.append("📋 Arguments:")
             lines.append(TelegramApprovalManager._format_arguments(request.arguments))
         lines.append("")
         lines.append("👉 Tap a button below to approve or deny.")
@@ -239,18 +242,20 @@ class TelegramApprovalManager(ApprovalManager):
         emoji = TelegramApprovalManager._emoji_for_decision(decision)
         lines = [
             f"{emoji} Write operation {decision.value}",
-            f"🔧 Tool: {request.tool_name}",
-            f"🆔 Request ID: {request.request_id}",
+            f"🔧 Tool: {html.escape(request.tool_name)}",
+            f"🆔 Request ID: {html.escape(request.request_id)}",
         ]
         if request.client_id:
-            lines.append(f"💻 Client ID: {request.client_id}")
+            lines.append(f"💻 Client ID: {html.escape(request.client_id)}")
         if request.arguments:
-            lines.append("Arguments: 📋")
+            lines.append("📋 Arguments:")
             lines.append(TelegramApprovalManager._format_arguments(request.arguments))
         if actor is not None:
-            lines.append(f"👤 Actor: {actor.full_name} (ID: {actor.id})")
+            lines.append(
+                f"👤 Actor: {html.escape(actor.full_name)} (ID: {actor.id})"
+            )
         if reason:
-            lines.append(f"📝 Notes: {reason}")
+            lines.append(f"📝 Notes: {html.escape(reason)}")
         return "\n".join(lines)
 
     # Argument keys that are internal identifiers, not useful for a human
@@ -284,23 +289,27 @@ class TelegramApprovalManager(ApprovalManager):
 
     @staticmethod
     def _format_arguments(arguments: Mapping[str, str]) -> str:
+        """Render arguments as an aligned monospace table (HTML <pre> block)."""
         visible = {
             key: value
             for key, value in arguments.items()
             if key not in TelegramApprovalManager._HIDDEN_ARG_KEYS
         }
         if not visible:
-            return "<none>"
+            return "(none)"
 
-        lines = []
+        key_width = max(len(key) for key in visible)
+        rows = []
         for key, value in visible.items():
             emoji = TelegramApprovalManager._emoji_for_argument(key, value)
-            suffix = f" {emoji}" if emoji else ""
-            lines.append(f"  • {key} = {value}{suffix}")
-        rendered = "\n".join(lines)
+            prefix = f"{emoji} " if emoji else ""
+            if len(value) >= 2 and value[0] == value[-1] == "'":
+                value = value[1:-1]
+            rows.append(f"{key.ljust(key_width)} │ {prefix}{value}")
+        rendered = "\n".join(rows)
         if len(rendered) > 1000:
-            return f"{rendered[:997]}..."
-        return rendered
+            rendered = f"{rendered[:997]}..."
+        return f"<pre>{html.escape(rendered)}</pre>"
 
     @staticmethod
     def _emoji_for_decision(decision: ApprovalDecision) -> str:
