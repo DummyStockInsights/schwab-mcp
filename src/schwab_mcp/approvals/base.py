@@ -17,10 +17,13 @@ class ApprovalDecision(str, Enum):
 
 
 # Argument keys a reviewer may adjust during approval, with the type each
-# override value is coerced to before the tool executes.
+# override value is coerced to before the tool executes. order_type is not
+# directly editable by reviewers; it is overridden implicitly (MARKET → LIMIT)
+# when a reviewer supplies a price for a market order.
 EDITABLE_ARGUMENT_TYPES: Mapping[str, type] = {
     "quantity": int,
     "price": float,
+    "order_type": str,
 }
 
 

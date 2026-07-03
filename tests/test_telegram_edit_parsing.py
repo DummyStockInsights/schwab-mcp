@@ -42,12 +42,36 @@ def test_validate_override_price() -> None:
     assert validate(request, "price", "1.95") == (True, "")
 
     market = make_request({"quantity": "10", "price": "None"})
-    ok, why = validate(market, "price", "1.95")
-    assert not ok and "market order" in why
+    assert validate(market, "price", "1.95") == (True, "")
 
     missing = make_request({"quantity": "10"})
     ok, why = validate(missing, "price", "1.95")
     assert not ok and "not part of this order" in why
+
+
+def test_record_override_converts_market_to_limit() -> None:
+    record = TelegramApprovalManager._record_override
+
+    market = make_request(
+        {"quantity": "10", "price": "None", "order_type": "'MARKET'"}
+    )
+    note = record(market, "price", "1.95")
+    assert market.overrides == {"price": "1.95", "order_type": "LIMIT"}
+    assert "MARKET → LIMIT" in note
+
+    limit = make_request(
+        {"quantity": "10", "price": "2.01", "order_type": "'LIMIT'"}
+    )
+    note = record(limit, "price", "1.95")
+    assert limit.overrides == {"price": "1.95"}
+    assert note == ""
+
+    qty_only = make_request(
+        {"quantity": "10", "price": "None", "order_type": "'MARKET'"}
+    )
+    note = record(qty_only, "quantity", "5")
+    assert qty_only.overrides == {"quantity": "5"}
+    assert note == ""
 
 
 def test_format_arguments_shows_overrides() -> None:
@@ -66,5 +90,8 @@ def test_pending_text_includes_edit_hint() -> None:
 
     market = make_request({"quantity": "10", "price": "None"})
     text = TelegramApprovalManager._build_pending_text(market)
-    assert "adjust quantity," in text or "adjust quantity" in text
-    assert "quantity/price" not in text
+    assert "Reply to this message to adjust quantity/price" in text
+
+    no_args = make_request({"symbol": "'F'"})
+    text = TelegramApprovalManager._build_pending_text(no_args)
+    assert "Reply to this message" not in text

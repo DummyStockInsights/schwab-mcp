@@ -18,7 +18,6 @@ from telegram.ext import (
 )
 
 from schwab_mcp.approvals.base import (
-    EDITABLE_ARGUMENT_TYPES,
     ApprovalDecision,
     ApprovalManager,
     ApprovalRequest,
@@ -259,8 +258,8 @@ class TelegramApprovalManager(ApprovalManager):
             ok, why = self._validate_override(pending.request, key, raw)
             if ok:
                 original = pending.request.arguments.get(key, "?")
-                pending.request.overrides[key] = raw
-                applied.append(f"{key}: {original} → {raw}")
+                notes = self._record_override(pending.request, key, raw)
+                applied.append(f"{key}: {original} → {raw}" + notes)
             else:
                 rejected.append(f"{key}: {why}")
 
@@ -287,7 +286,7 @@ class TelegramApprovalManager(ApprovalManager):
     def _validate_override(
         request: ApprovalRequest, key: str, raw: str
     ) -> tuple[bool, str]:
-        if key not in EDITABLE_ARGUMENT_TYPES:
+        if key not in ("quantity", "price"):
             return False, "not editable"
         if key not in request.arguments:
             return False, "not part of this order"
@@ -299,8 +298,6 @@ class TelegramApprovalManager(ApprovalManager):
             if quantity <= 0:
                 return False, "quantity must be positive"
         elif key == "price":
-            if request.arguments.get("price") == "None":
-                return False, "this order has no price (market order)"
             try:
                 price = float(raw)
             except ValueError:
@@ -308,6 +305,22 @@ class TelegramApprovalManager(ApprovalManager):
             if price <= 0:
                 return False, "price must be positive"
         return True, ""
+
+    @staticmethod
+    def _record_override(request: ApprovalRequest, key: str, raw: str) -> str:
+        """Record a validated override. Returns extra notes for the reply.
+
+        Setting a price on a market order implicitly converts it to a LIMIT
+        order — a market order has no price, so a reviewer-supplied price is
+        only meaningful as a limit.
+        """
+        request.overrides[key] = raw
+        if key == "price":
+            order_type = (request.arguments.get("order_type") or "").strip("'\"")
+            if order_type.upper() == "MARKET":
+                request.overrides["order_type"] = "LIMIT"
+                return " (MARKET → LIMIT)"
+        return ""
 
     async def _refresh_pending_message(self, pending: _PendingApproval) -> None:
         try:
@@ -350,14 +363,7 @@ class TelegramApprovalManager(ApprovalManager):
 
     @staticmethod
     def _editable_keys(request: ApprovalRequest) -> list[str]:
-        keys = []
-        for key in EDITABLE_ARGUMENT_TYPES:
-            if key not in request.arguments:
-                continue
-            if key == "price" and request.arguments.get("price") == "None":
-                continue
-            keys.append(key)
-        return keys
+        return [key for key in ("quantity", "price") if key in request.arguments]
 
     @staticmethod
     def _build_pending_text(request: ApprovalRequest) -> str:

@@ -85,9 +85,18 @@ async def sample_write_tool(ctx: SchwabContext, symbol: str) -> str:
 
 
 async def sample_order_tool(
-    ctx: SchwabContext, symbol: str, quantity: int, price: float | None = None
+    ctx: SchwabContext,
+    symbol: str,
+    quantity: int,
+    price: float | None = None,
+    order_type: str = "MARKET",
 ) -> dict:
-    return {"symbol": symbol, "quantity": quantity, "price": price}
+    return {
+        "symbol": symbol,
+        "quantity": quantity,
+        "price": price,
+        "order_type": order_type,
+    }
 
 
 def wrapped_tool():
@@ -210,10 +219,30 @@ def test_write_tool_applies_reviewer_overrides() -> None:
     ctx = make_ctx_with_manager(manager)
     tool = wrapped_order_tool()
 
-    result = await_result(tool(ctx, "spy", 10, price=2.01))
+    result = await_result(tool(ctx, "spy", 10, price=2.01, order_type="LIMIT"))
 
-    assert result == {"symbol": "spy", "quantity": 5, "price": 1.95}
+    assert result == {
+        "symbol": "spy",
+        "quantity": 5,
+        "price": 1.95,
+        "order_type": "LIMIT",
+    }
     assert manager.requests[0].arguments["quantity"] == "10"
+
+
+def test_write_tool_applies_market_to_limit_conversion() -> None:
+    manager = OverridingApprovalManager({"price": "1.95", "order_type": "LIMIT"})
+    ctx = make_ctx_with_manager(manager)
+    tool = wrapped_order_tool()
+
+    result = await_result(tool(ctx, "spy", 10, price=None, order_type="MARKET"))
+
+    assert result == {
+        "symbol": "spy",
+        "quantity": 10,
+        "price": 1.95,
+        "order_type": "LIMIT",
+    }
 
 
 def test_write_tool_ignores_invalid_reviewer_override() -> None:
@@ -223,7 +252,12 @@ def test_write_tool_ignores_invalid_reviewer_override() -> None:
 
     result = await_result(tool(ctx, "spy", 10, price=2.01))
 
-    assert result == {"symbol": "spy", "quantity": 10, "price": 2.01}
+    assert result == {
+        "symbol": "spy",
+        "quantity": 10,
+        "price": 2.01,
+        "order_type": "MARKET",
+    }
 
 
 def test_discord_manager_requires_approvers() -> None:
