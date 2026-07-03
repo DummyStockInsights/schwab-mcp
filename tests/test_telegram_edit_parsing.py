@@ -1,7 +1,24 @@
 from __future__ import annotations
 
+import inspect
+
+import pytest
+
 from schwab_mcp.approvals import ApprovalRequest
 from schwab_mcp.approvals.telegram import TelegramApprovalManager
+from schwab_mcp.tools import orders
+
+
+def stringified_arguments(func, /, **values) -> dict[str, str]:
+    """Mirror how _wrap_with_approval stringifies a tool call's arguments."""
+    signature = inspect.signature(func)
+    bound = signature.bind_partial(ctx=None, **values)
+    bound.apply_defaults()
+    return {
+        name: repr(value)
+        for name, value in bound.arguments.items()
+        if name != "ctx"
+    }
 
 
 def make_request(arguments: dict[str, str]) -> ApprovalRequest:
@@ -81,6 +98,71 @@ def test_format_arguments_shows_overrides() -> None:
     )
     assert "10 → 5" in rendered
     assert "2.01" in rendered
+
+
+@pytest.mark.parametrize(
+    "func,call_kwargs",
+    [
+        (
+            orders.place_equity_order,
+            dict(
+                account_hash="hash",
+                symbol="F",
+                quantity=1,
+                instruction="BUY",
+                order_type="MARKET",
+            ),
+        ),
+        (
+            orders.place_equity_order,
+            dict(
+                account_hash="hash",
+                symbol="F",
+                quantity=1,
+                instruction="SELL",
+                order_type="LIMIT",
+                price=10.5,
+            ),
+        ),
+        (
+            orders.place_option_order,
+            dict(
+                account_hash="hash",
+                symbol="MSFT  260710C00410000",
+                quantity=10,
+                instruction="BUY_TO_OPEN",
+                order_type="MARKET",
+            ),
+        ),
+        (
+            orders.place_option_order,
+            dict(
+                account_hash="hash",
+                symbol="MSFT  260710C00410000",
+                quantity=5,
+                instruction="SELL_TO_CLOSE",
+                order_type="LIMIT",
+                price=2.49,
+            ),
+        ),
+    ],
+)
+def test_every_pilot_order_is_qty_and_price_editable(func, call_kwargs) -> None:
+    """Hard guarantee: any order the pilot tools can place accepts
+    quantity AND price edits during approval, regardless of order type
+    or direction."""
+    request = make_request(stringified_arguments(func, **call_kwargs))
+
+    assert TelegramApprovalManager._editable_keys(request) == [
+        "quantity",
+        "price",
+    ]
+    validate = TelegramApprovalManager._validate_override
+    assert validate(request, "quantity", "3") == (True, "")
+    assert validate(request, "price", "1.23") == (True, "")
+    assert "Reply to this message to adjust quantity/price" in (
+        TelegramApprovalManager._build_pending_text(request)
+    )
 
 
 def test_pending_text_includes_edit_hint() -> None:
