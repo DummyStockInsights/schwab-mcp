@@ -429,6 +429,7 @@ class TelegramApprovalManager(ApprovalManager):
     # Best-effort emoji per well-known order-tool argument key. Falls back to
     # a plain bullet for anything not in this map.
     _ARG_KEY_EMOJI = {
+        "account": "🏦",
         "symbol": "📈",
         "quantity": "🔢",
         "order_type": "🧾",

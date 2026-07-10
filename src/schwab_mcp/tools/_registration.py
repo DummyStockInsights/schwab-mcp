@@ -146,6 +146,37 @@ async def run_approval(context: SchwabContext, request: ApprovalRequest) -> Appr
     return decision
 
 
+# hashValue -> accountNumber, resolved once per process (the mapping is stable
+# for the lifetime of an account) so approval messages can show the human
+# account number instead of the opaque hash.
+_ACCOUNT_NUMBER_CACHE: dict[str, str] = {}
+
+
+async def _resolve_account_number(
+    context: SchwabContext, account_hash: str
+) -> str | None:
+    """Best-effort reverse lookup of the plain account number for a hash.
+
+    Returns None on any failure so the approval message simply omits the
+    account line rather than delaying or blocking the approval flow.
+    """
+    if account_hash in _ACCOUNT_NUMBER_CACHE:
+        return _ACCOUNT_NUMBER_CACHE[account_hash]
+    try:
+        response = await context.accounts.get_account_numbers()
+        for entry in response.json():
+            _ACCOUNT_NUMBER_CACHE[str(entry["hashValue"])] = str(
+                entry["accountNumber"]
+            )
+    except Exception:
+        logger.warning(
+            "Could not resolve account number for approval message",
+            exc_info=True,
+        )
+        return None
+    return _ACCOUNT_NUMBER_CACHE.get(account_hash)
+
+
 def _wrap_with_approval(func: ToolFn) -> ToolFn:
     signature, ctx_params = _resolve_context_parameters(func)
     if not ctx_params:
@@ -179,6 +210,14 @@ def _wrap_with_approval(func: ToolFn) -> ToolFn:
             raise RuntimeError(f"Write tool '{func.__name__}' missing SchwabContext during invocation.")
 
         arguments = {name: _format_argument(arg) for name, arg in bound.arguments.items() if name not in ctx_params}
+
+        raw_hash = bound.arguments.get("account_hash")
+        if isinstance(raw_hash, str) and raw_hash:
+            account_number = await _resolve_account_number(context, raw_hash)
+            if account_number:
+                # Shown in the approval message; account_hash itself stays in
+                # arguments but is suppressed at render time (_HIDDEN_ARG_KEYS).
+                arguments = {"account": account_number, **arguments}
 
         request = ApprovalRequest(
             id=str(uuid.uuid4()),

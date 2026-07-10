@@ -532,7 +532,9 @@ def test_server_warns_when_jesus_flag_and_discord_token_both_set(monkeypatch):
 
     assert result.exit_code == 0
     # Warning goes to stderr
-    assert "bypasses Discord approvals" in (result.output + (result.stderr or ""))
+    assert "bypasses Discord/Telegram approvals" in (
+        result.output + (result.stderr or "")
+    )
 
 
 # ---------------------------------------------------------------------------
