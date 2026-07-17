@@ -1,6 +1,9 @@
 """Order placement, management, and preview tools for the Schwab MCP server."""
 
+import datetime
+import re
 import uuid
+from zoneinfo import ZoneInfo
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Annotated, Any, cast
@@ -36,6 +39,7 @@ from schwab_mcp.tools.order_helpers import (
     option_buy_to_open_market,
     option_sell_to_close_limit,
     option_sell_to_close_market,
+    option_sell_to_close_stop,
     option_sell_to_open_limit,
     option_sell_to_open_market,
 )
@@ -1273,6 +1277,173 @@ async def place_previewed_order(
     raise TimeoutError(message)
 
 
+# ---------------------------------------------------------------------------
+# Pilot fast path (fork addition): one-call option placement with local
+# expiry validation and a Schwab preview gate. The upstream preview_* /
+# place_previewed_order flow remains available; these tools trade its
+# two-step round trip for a single call whose raw arguments (quantity,
+# price, stop_price) stay reviewer-editable during Telegram approval.
+# ---------------------------------------------------------------------------
+
+# Tolerates both the fully padded OCC form ("MSFT  260717C00407500") and the
+# compact form create_option_symbol/schwab-py produce ("SPY 260717C500").
+_OCC_SYMBOL_RE = re.compile(r"^[A-Z.$]{1,6}\s*(\d{6})[CP][\d.]{1,15}$")
+
+
+def _validate_option_expiry(symbol: str) -> None:
+    """Reject option symbols whose expiry date is already in the past.
+
+    A mis-built year digit (e.g. 25 instead of 26) silently encodes an
+    expired contract; catching it here turns that into an immediate,
+    correctable error instead of an invalid live order.
+    """
+    match = _OCC_SYMBOL_RE.match(symbol)
+    if match is None:
+        raise ValueError(f"Not a parsable OCC option symbol: {symbol!r}")
+    raw = match.group(1)
+    try:
+        expiry = datetime.date(2000 + int(raw[0:2]), int(raw[2:4]), int(raw[4:6]))
+    except ValueError as exc:
+        raise ValueError(
+            f"Option symbol {symbol!r} encodes an invalid expiry date {raw!r}"
+        ) from exc
+    today = datetime.datetime.now(ZoneInfo("America/New_York")).date()
+    if expiry < today:
+        raise ValueError(
+            f"Option symbol {symbol!r} expiry {expiry.isoformat()} is in the past "
+            f"(today is {today.isoformat()} US/Eastern) — the year digits are "
+            "likely mis-built; expected format YYMMDD in the contract's real year"
+        )
+
+
+def _preview_reject_messages(preview: Any) -> list[str]:
+    """Extract Schwab reject messages from a previewOrder payload."""
+    if not isinstance(preview, dict):
+        return []
+    validation = preview.get("orderValidationResult")
+    if not isinstance(validation, dict):
+        return []
+    messages: list[str] = []
+    for reject in validation.get("rejects") or []:
+        if isinstance(reject, dict):
+            messages.append(
+                str(reject.get("message") or reject.get("activityMessage") or reject)
+            )
+        else:
+            messages.append(str(reject))
+    return messages
+
+
+async def _run_preview_gate(
+    ctx: SchwabContext, account_hash: str, order_spec_dict: dict[str, Any]
+) -> None:
+    """Preview the order with Schwab before placing it; raise on rejects.
+
+    Fail-open on transport/endpoint errors: placement re-runs the same
+    validation server-side, so a broken preview must never block a valid
+    order. Only an affirmative reject in a successful preview stops the flow.
+    """
+    preview_fn = getattr(ctx.orders, "preview_order", None)
+    if preview_fn is None:
+        return
+    try:
+        preview = await call(
+            preview_fn, account_hash=account_hash, order_spec=order_spec_dict
+        )
+    except Exception:
+        return
+    rejects = _preview_reject_messages(preview)
+    if rejects:
+        raise ValueError(
+            "Schwab order preview rejected this order (nothing was placed): "
+            + "; ".join(rejects)
+        )
+
+
+async def place_option_order(
+    ctx: SchwabContext,
+    account_hash: Annotated[str, "Account hash for the Schwab account"],
+    symbol: Annotated[
+        str,
+        "Option symbol in Schwab's space-delimited format (e.g., 'SPY 230616C400'). Use create_option_symbol() to build one.",
+    ],
+    quantity: Annotated[int, "Number of contracts to trade"],
+    instruction: Annotated[str, "BUY_TO_OPEN, SELL_TO_OPEN, BUY_TO_CLOSE, or SELL_TO_CLOSE"],
+    order_type: Annotated[str, "Order type: MARKET or LIMIT"],
+    price: Annotated[float | None, "Required for LIMIT orders (price per contract)"] = None,
+    session: Annotated[
+        str | None, "Trading session: NORMAL (default), AM, PM, or SEAMLESS"
+    ] = "NORMAL",
+    duration: Annotated[
+        str | None,
+        "Order duration: DAY (default), GOOD_TILL_CANCEL, FILL_OR_KILL (Limit only)",
+    ] = "DAY",
+) -> JSONType:
+    """
+    Places a single-leg option order (MARKET, LIMIT) in one call.
+    Params: account_hash, symbol, quantity, instruction (BUY_TO_OPEN/etc.), order_type.
+    Optional/Conditional: price (for LIMIT), session (default NORMAL), duration (default DAY).
+    Validates the expiry date locally and previews with Schwab before
+    submitting. *Write operation.*
+    """
+    _validate_option_expiry(symbol)
+
+    order_spec_dict = _prepare_option_order(
+        symbol, quantity, instruction, order_type, price, session, duration
+    )
+
+    await _run_preview_gate(ctx, account_hash, order_spec_dict)
+
+    return await call(
+        ctx.orders.place_order,
+        account_hash=account_hash,
+        order_spec=order_spec_dict,
+        response_handler=_order_response_handler(ctx, account_hash),
+    )
+
+
+async def place_option_entry_with_stop(
+    ctx: SchwabContext,
+    account_hash: Annotated[str, "Account hash for the Schwab account"],
+    symbol: Annotated[str, "Option symbol (OCC format, e.g. 'MSFT  260717C00407500')"],
+    quantity: Annotated[int, "Number of contracts (same for entry and stop)"],
+    price: Annotated[float, "Limit price for the BUY_TO_OPEN entry (per contract)"],
+    stop_price: Annotated[
+        float, "Stop trigger price for the protective SELL_TO_CLOSE (per contract)"
+    ],
+) -> JSONType:
+    """
+    Places a BUY_TO_OPEN limit entry that, once filled, automatically places a
+    good-till-cancel SELL_TO_CLOSE stop for the same quantity
+    (first-triggers-second). One approval covers both legs.
+    Params: account_hash, symbol, quantity, price (entry limit), stop_price (stop trigger).
+    The entry is a DAY limit order; the stop is GTC so protection survives
+    past the entry day. Validates the expiry date locally and previews with
+    Schwab before submitting. *Write operation.*
+    """
+    _validate_option_expiry(symbol)
+    if stop_price >= price:
+        raise ValueError(
+            f"stop_price ({stop_price}) must be below the entry limit price "
+            f"({price}) for a long option entry"
+        )
+
+    entry_builder = option_buy_to_open_limit(symbol, quantity, price)
+    stop_builder = option_sell_to_close_stop(symbol, quantity, stop_price)
+    trigger_order_dict = cast(
+        dict[str, Any], trigger_builder(entry_builder, stop_builder).build()
+    )
+
+    await _run_preview_gate(ctx, account_hash, trigger_order_dict)
+
+    return await call(
+        ctx.orders.place_order,
+        account_hash=account_hash,
+        order_spec=trigger_order_dict,
+        response_handler=_order_response_handler(ctx, account_hash),
+    )
+
+
 _READ_ONLY_TOOLS = (
     get_order,
     get_orders,
@@ -1286,7 +1457,11 @@ _READ_ONLY_TOOLS = (
     preview_option_combo_order,
 )
 
-_WRITE_TOOLS = (cancel_order,)  # keeps automatic argument-dump approval
+_WRITE_TOOLS = (
+    cancel_order,
+    place_option_order,
+    place_option_entry_with_stop,
+)  # keeps automatic argument-dump approval
 
 
 def register(

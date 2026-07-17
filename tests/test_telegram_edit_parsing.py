@@ -104,27 +104,6 @@ def test_format_arguments_shows_overrides() -> None:
     "func,call_kwargs",
     [
         (
-            orders.place_equity_order,
-            dict(
-                account_hash="hash",
-                symbol="F",
-                quantity=1,
-                instruction="BUY",
-                order_type="MARKET",
-            ),
-        ),
-        (
-            orders.place_equity_order,
-            dict(
-                account_hash="hash",
-                symbol="F",
-                quantity=1,
-                instruction="SELL",
-                order_type="LIMIT",
-                price=10.5,
-            ),
-        ),
-        (
             orders.place_option_order,
             dict(
                 account_hash="hash",
@@ -143,6 +122,16 @@ def test_format_arguments_shows_overrides() -> None:
                 instruction="SELL_TO_CLOSE",
                 order_type="LIMIT",
                 price=2.49,
+            ),
+        ),
+        (
+            orders.place_option_entry_with_stop,
+            dict(
+                account_hash="hash",
+                symbol="MSFT  260717C00407500",
+                quantity=8,
+                price=1.81,
+                stop_price=1.5,
             ),
         ),
     ],

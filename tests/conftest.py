@@ -116,17 +116,41 @@ def order_response_factory():
     return factory
 
 
+class DummyPreviewResponse:
+    """Successful previewOrder response with a configurable payload."""
+
+    def __init__(self, payload: Any = None):
+        self.status_code = 200
+        self._payload = payload if payload is not None else {}
+        self.content = b"{}"
+        self.text = "{}"
+        self.url = "https://api.schwabapi.com/previewOrder"
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> Any:
+        return self._payload
+
+
 class DummyPlaceOrderClient:
     """Mock client for place_order() method testing."""
 
-    def __init__(self, order_response: Any):
+    def __init__(self, order_response: Any, preview_payload: Any = None):
         self.captured: dict[str, Any] | None = None
+        self.preview_captured: dict[str, Any] | None = None
         self._response = order_response
+        self._preview_payload = preview_payload
 
     async def place_order(self, *args: Any, **kwargs: Any) -> Any:
         """Capture call arguments and return mock response."""
         self.captured = {"args": args, "kwargs": kwargs}
         return self._response
+
+    async def preview_order(self, *args: Any, **kwargs: Any) -> Any:
+        """Capture preview arguments and return a clean preview response."""
+        self.preview_captured = {"args": args, "kwargs": kwargs}
+        return DummyPreviewResponse(self._preview_payload)
 
 
 @pytest.fixture

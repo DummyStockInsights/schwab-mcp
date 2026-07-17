@@ -201,6 +201,28 @@ def option_sell_to_close_limit(symbol, quantity, price, duration=Duration.DAY, s
     )
 
 
+def option_sell_to_close_stop(
+    symbol,
+    quantity,
+    stop_price,
+    duration=Duration.GOOD_TILL_CANCEL,
+    session=Session.NORMAL,
+):
+    """
+    Returns a pre-filled OrderBuilder for a sell-to-close stop order.
+
+    Defaults to GOOD_TILL_CANCEL so a protective stop attached to an entry
+    (first-triggers-second) survives past the entry day instead of silently
+    dying at the close.
+    """
+    return (
+        __option_base_builder(session, duration)
+        .set_order_type(OrderType.STOP)
+        .set_stop_price(stop_price)
+        .add_option_leg(OptionInstruction.SELL_TO_CLOSE, symbol, quantity)
+    )
+
+
 def equity_trailing_stop(
     symbol,
     quantity,
