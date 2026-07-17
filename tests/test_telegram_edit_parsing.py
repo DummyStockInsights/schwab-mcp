@@ -216,6 +216,25 @@ def test_every_pilot_order_is_qty_and_price_editable(func, call_kwargs) -> None:
     )
 
 
+def test_pending_text_example_includes_stop_when_editable() -> None:
+    bracket = make_request(
+        {
+            "quantity": "8",
+            "price": "1.81",
+            "stop_price": "None",
+            "instruction": "'BUY_TO_OPEN'",
+        }
+    )
+    text = TelegramApprovalManager._build_pending_text(bracket)
+    assert "quantity/price/stop_price" in text
+    assert 'e.g. "qty 5 price 1.95 stop 1.45"' in text
+
+    plain = make_request({"quantity": "10", "price": "2.01"})
+    text = TelegramApprovalManager._build_pending_text(plain)
+    assert 'e.g. "qty 5 price 1.95"' in text
+    assert "stop" not in text
+
+
 def test_pending_text_includes_edit_hint() -> None:
     request = make_request({"quantity": "10", "price": "2.01"})
     text = TelegramApprovalManager._build_pending_text(request)

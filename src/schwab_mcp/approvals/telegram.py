@@ -468,9 +468,15 @@ class TelegramApprovalManager(ApprovalManager):
             )
         editable = TelegramApprovalManager._editable_keys(request)
         if editable:
+            example_parts = {
+                "quantity": "qty 5",
+                "price": "price 1.95",
+                "stop_price": "stop 1.45",
+            }
+            example = " ".join(example_parts[key] for key in editable)
             lines.append(
                 f"✏️ Reply to this message to adjust {'/'.join(editable)},"
-                ' e.g. "qty 5 price 1.95".'
+                f' e.g. "{example}".'
             )
         lines.append("")
         lines.append("👉 Tap a button below to approve or deny.")
