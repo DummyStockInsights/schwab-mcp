@@ -1483,6 +1483,35 @@ async def place_option_entry_with_stop(
     )
 
 
+def _validate_option_order_args(args: dict[str, Any]) -> None:
+    """Pre-approval validation shared by the pilot fast-path tools.
+
+    Runs in the approval wrapper before the reviewer is pinged; the same
+    rules are re-checked inside the tool bodies (which also covers values
+    changed by reviewer overrides).
+    """
+    symbol = args.get("symbol")
+    if isinstance(symbol, str):
+        _validate_option_expiry(symbol)
+    stop_price = args.get("stop_price")
+    if stop_price is not None:
+        instruction = args.get("instruction")
+        if isinstance(instruction, str) and instruction.upper() != "BUY_TO_OPEN":
+            raise ValueError("stop_price can only be attached to BUY_TO_OPEN orders")
+        price = args.get("price")
+        if price is None:
+            raise ValueError("stop_price requires a LIMIT order with a price")
+        if stop_price >= price:
+            raise ValueError(
+                f"stop_price ({stop_price}) must be below the entry limit "
+                f"price ({price})"
+            )
+
+
+place_option_order.pre_approval_validate = _validate_option_order_args  # type: ignore[attr-defined]
+place_option_entry_with_stop.pre_approval_validate = _validate_option_order_args  # type: ignore[attr-defined]
+
+
 _READ_ONLY_TOOLS = (
     get_order,
     get_orders,

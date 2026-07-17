@@ -209,6 +209,14 @@ def _wrap_with_approval(func: ToolFn) -> ToolFn:
         if context is None:
             raise RuntimeError(f"Write tool '{func.__name__}' missing SchwabContext during invocation.")
 
+        # Deterministic argument validation BEFORE the human is asked:
+        # obviously invalid orders (expired symbol, stop above entry) should
+        # bounce straight back to the caller for self-correction instead of
+        # appearing on the reviewer's phone.
+        validator = getattr(func, "pre_approval_validate", None)
+        if validator is not None:
+            validator(dict(bound.arguments))
+
         arguments = {name: _format_argument(arg) for name, arg in bound.arguments.items() if name not in ctx_params}
 
         raw_hash = bound.arguments.get("account_hash")

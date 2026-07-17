@@ -381,3 +381,24 @@ def test_has_progress_token_returns_false_on_value_error() -> None:
 
     bad_ctx = cast(SchwabContext, _BadContext())
     assert _registration._has_progress_token(bad_ctx) is False
+
+
+def test_pre_approval_validator_blocks_before_reviewer() -> None:
+    """A tool's pre_approval_validate runs before any approval request."""
+    manager = RecordingApprovalManager(ApprovalDecision.APPROVED)
+    ctx = make_ctx_with_manager(manager)
+
+    async def bad_order(ctx: SchwabContext, symbol: str, quantity: int = 1):
+        return {"symbol": symbol}
+
+    def reject_everything(args):
+        raise ValueError("expired symbol")
+
+    bad_order.pre_approval_validate = reject_everything
+    ensured = _registration._ensure_schwab_context(bad_order)
+    tool = _registration._wrap_with_approval(ensured)
+
+    with pytest.raises(ValueError, match="expired symbol"):
+        await_result(tool(ctx, "SPY 240101C00500000"))
+
+    assert manager.requests == []  # reviewer never pinged
