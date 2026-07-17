@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Mapping, Sequence
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, User
-from telegram.error import TelegramError
+from telegram.error import NetworkError, TelegramError, TimedOut
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -122,10 +122,35 @@ class TelegramApprovalManager(ApprovalManager):
             ]
         )
 
+    async def _send_with_retry(self, **kwargs):
+        """Send a Telegram message, retrying transient network failures.
+
+        The default PTB timeouts (5s connect/read) are easily tripped by a
+        flaky route to api.telegram.org; a failed send here would abort the
+        whole order tool call, so widen the timeouts and retry twice before
+        giving up.
+        """
+        last_exc: Exception | None = None
+        for attempt in range(3):
+            try:
+                return await self._application.bot.send_message(
+                    connect_timeout=10,
+                    read_timeout=15,
+                    write_timeout=15,
+                    **kwargs,
+                )
+            except (TimedOut, NetworkError) as exc:
+                last_exc = exc
+                logger.warning(
+                    "Telegram send_message attempt %d/3 failed: %s", attempt + 1, exc
+                )
+                await asyncio.sleep(1.5 * (attempt + 1))
+        raise last_exc  # type: ignore[misc]
+
     async def require(self, request: ApprovalRequest) -> ApprovalDecision:
         await self.start()
 
-        message = await self._application.bot.send_message(
+        message = await self._send_with_retry(
             chat_id=self._settings.chat_id,
             text=self._build_pending_text(request),
             reply_markup=self._build_keyboard(request.id),
