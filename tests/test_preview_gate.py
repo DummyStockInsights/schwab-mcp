@@ -123,3 +123,59 @@ def test_entry_with_stop_preview_reject_blocks(order_response_factory) -> None:
             )
         )
     assert client.captured is None
+
+
+def test_plain_order_with_stop_price_builds_trigger(order_response_factory) -> None:
+    client = _client(order_response_factory)
+    ctx = make_ctx(client)
+    result = run(
+        orders.place_option_order(
+            ctx, "hash", _future_occ(), 5, "BUY_TO_OPEN", "LIMIT",
+            price=1.81, stop_price=1.5,
+        )
+    )
+    assert result["orderId"] == 42
+    placed = client.captured["kwargs"]["order_spec"]
+    assert placed["orderStrategyType"] == "TRIGGER"
+    child = placed["childOrderStrategies"][0]
+    assert child["orderType"] == "STOP"
+    assert child["duration"] == "GOOD_TILL_CANCEL"
+
+
+def test_stop_price_rejected_for_sells(order_response_factory) -> None:
+    client = _client(order_response_factory)
+    ctx = make_ctx(client)
+    with pytest.raises(ValueError, match="BUY_TO_OPEN"):
+        run(
+            orders.place_option_order(
+                ctx, "hash", _future_occ(), 5, "SELL_TO_CLOSE", "LIMIT",
+                price=2.0, stop_price=1.5,
+            )
+        )
+    assert client.captured is None
+
+
+def test_stop_price_rejected_for_market(order_response_factory) -> None:
+    client = _client(order_response_factory)
+    ctx = make_ctx(client)
+    with pytest.raises(ValueError, match="LIMIT order"):
+        run(
+            orders.place_option_order(
+                ctx, "hash", _future_occ(), 5, "BUY_TO_OPEN", "MARKET",
+                stop_price=1.5,
+            )
+        )
+    assert client.captured is None
+
+
+def test_stop_price_must_be_below_entry(order_response_factory) -> None:
+    client = _client(order_response_factory)
+    ctx = make_ctx(client)
+    with pytest.raises(ValueError, match="below the entry"):
+        run(
+            orders.place_option_order(
+                ctx, "hash", _future_occ(), 5, "BUY_TO_OPEN", "LIMIT",
+                price=1.81, stop_price=2.5,
+            )
+        )
+    assert client.captured is None

@@ -351,6 +351,8 @@ class TelegramApprovalManager(ApprovalManager):
                     "adjust stop_price first if needed"
                 )
         elif key == "stop_price":
+            if not TelegramApprovalManager._stop_editable(request):
+                return False, "stops can only be attached to opening buys"
             try:
                 stop = float(raw)
             except ValueError:
@@ -358,7 +360,12 @@ class TelegramApprovalManager(ApprovalManager):
             if stop <= 0:
                 return False, "stop_price must be positive"
             entry = _effective("price")
-            if entry is not None and stop >= entry:
+            if entry is None:
+                return False, (
+                    "set a limit price first (reply 'price X') before "
+                    "attaching a stop"
+                )
+            if stop >= entry:
                 return False, (
                     f"stop_price must be below the entry price ({entry})"
                 )
@@ -420,12 +427,28 @@ class TelegramApprovalManager(ApprovalManager):
             )
 
     @staticmethod
+    @staticmethod
+    def _stop_editable(request: ApprovalRequest) -> bool:
+        """stop_price is only meaningful on opening buys.
+
+        entry_with_stop orders carry no instruction argument (implicitly
+        BUY_TO_OPEN); plain option orders carry one and must be BUY_TO_OPEN.
+        """
+        if "stop_price" not in request.arguments:
+            return False
+        instruction = request.arguments.get("instruction")
+        if instruction is None:
+            return True
+        return "BUY_TO_OPEN" in instruction.upper()
+
+    @staticmethod
     def _editable_keys(request: ApprovalRequest) -> list[str]:
-        return [
-            key
-            for key in ("quantity", "price", "stop_price")
-            if key in request.arguments
+        keys = [
+            key for key in ("quantity", "price") if key in request.arguments
         ]
+        if TelegramApprovalManager._stop_editable(request):
+            keys.append("stop_price")
+        return keys
 
     @staticmethod
     def _build_pending_text(request: ApprovalRequest) -> str:

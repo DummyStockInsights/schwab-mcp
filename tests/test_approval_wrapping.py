@@ -224,12 +224,14 @@ def test_write_tool_applies_reviewer_overrides() -> None:
 
     result = await_result(tool(ctx, "spy", 10, price=2.01, order_type="LIMIT"))
 
-    assert result == {
+    assert result["order_result"] == {
         "symbol": "spy",
         "quantity": 5,
         "price": 1.95,
         "order_type": "LIMIT",
     }
+    assert result["applied_overrides"] == {"quantity": 5, "price": 1.95}
+    assert "effective values" in result["note"]
     assert manager.requests[0].arguments["quantity"] == "10"
 
 
@@ -240,12 +242,13 @@ def test_write_tool_applies_market_to_limit_conversion() -> None:
 
     result = await_result(tool(ctx, "spy", 10, price=None, order_type="MARKET"))
 
-    assert result == {
+    assert result["order_result"] == {
         "symbol": "spy",
         "quantity": 10,
         "price": 1.95,
         "order_type": "LIMIT",
     }
+    assert result["applied_overrides"] == {"price": 1.95, "order_type": "LIMIT"}
 
 
 def test_write_tool_ignores_invalid_reviewer_override() -> None:

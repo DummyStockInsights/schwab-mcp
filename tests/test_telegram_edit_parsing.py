@@ -112,6 +112,44 @@ def test_validate_override_stop_price() -> None:
     assert not ok and "not part of this order" in why
 
 
+def test_stop_edit_gated_by_instruction() -> None:
+    validate = TelegramApprovalManager._validate_override
+
+    plain_buy = make_request(
+        {
+            "quantity": "8",
+            "price": "1.81",
+            "stop_price": "None",
+            "instruction": "'BUY_TO_OPEN'",
+        }
+    )
+    assert validate(plain_buy, "stop_price", "1.4") == (True, "")
+    assert "stop_price" in TelegramApprovalManager._editable_keys(plain_buy)
+
+    reduce_sell = make_request(
+        {
+            "quantity": "8",
+            "price": "1.81",
+            "stop_price": "None",
+            "instruction": "'SELL_TO_CLOSE'",
+        }
+    )
+    ok, why = validate(reduce_sell, "stop_price", "1.4")
+    assert not ok and "opening buys" in why
+    assert "stop_price" not in TelegramApprovalManager._editable_keys(reduce_sell)
+
+    market_buy = make_request(
+        {
+            "quantity": "8",
+            "price": "None",
+            "stop_price": "None",
+            "instruction": "'BUY_TO_OPEN'",
+        }
+    )
+    ok, why = validate(market_buy, "stop_price", "1.4")
+    assert not ok and "limit price first" in why
+
+
 def test_format_arguments_shows_overrides() -> None:
     request = make_request({"quantity": "10", "price": "2.01"})
     rendered = TelegramApprovalManager._format_arguments(
@@ -164,7 +202,8 @@ def test_every_pilot_order_is_qty_and_price_editable(func, call_kwargs) -> None:
     request = make_request(stringified_arguments(func, **call_kwargs))
 
     expected = ["quantity", "price"]
-    if "stop_price" in call_kwargs:
+    instruction = call_kwargs.get("instruction")
+    if instruction is None or instruction == "BUY_TO_OPEN":
         expected.append("stop_price")
     assert TelegramApprovalManager._editable_keys(request) == expected
     validate = TelegramApprovalManager._validate_override

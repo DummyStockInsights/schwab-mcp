@@ -238,6 +238,7 @@ def _wrap_with_approval(func: ToolFn) -> ToolFn:
             request.overrides or "<none>",
         )
         if decision is ApprovalDecision.APPROVED:
+            applied_overrides: dict[str, Any] = {}
             for key, raw in request.overrides.items():
                 caster = EDITABLE_ARGUMENT_TYPES.get(key)
                 if caster is None or key not in bound.arguments:
@@ -251,9 +252,27 @@ def _wrap_with_approval(func: ToolFn) -> ToolFn:
                         raw,
                         func.__name__,
                     )
+                else:
+                    applied_overrides[key] = bound.arguments[key]
             result = func(*bound.args, **bound.kwargs)
             if inspect.isawaitable(result):
-                return await result
+                result = await result
+            if applied_overrides:
+                # Surface reviewer edits to the caller: without this, an LLM
+                # caller only knows the arguments it originally submitted and
+                # will summarize/journal stale values (e.g. the pre-edit
+                # quantity, or a missing reviewer-added stop).
+                return {
+                    "order_result": result,
+                    "applied_overrides": applied_overrides,
+                    "note": (
+                        "A human reviewer adjusted the argument(s) in "
+                        "applied_overrides at approval time. Use these "
+                        "effective values — NOT your originally submitted "
+                        "ones — in any summary, journal entry, or follow-up "
+                        "reasoning."
+                    ),
+                }
             return result
 
         message = (

@@ -1379,6 +1379,14 @@ async def place_option_order(
     instruction: Annotated[str, "BUY_TO_OPEN, SELL_TO_OPEN, BUY_TO_CLOSE, or SELL_TO_CLOSE"],
     order_type: Annotated[str, "Order type: MARKET or LIMIT"],
     price: Annotated[float | None, "Required for LIMIT orders (price per contract)"] = None,
+    stop_price: Annotated[
+        float | None,
+        "Optional protective stop for BUY_TO_OPEN LIMIT orders: attaches a "
+        "GTC SELL_TO_CLOSE stop (first-triggers-second) for the same "
+        "quantity. Intended for the human reviewer to set via approval "
+        "edits; automated callers should leave it unset unless the source "
+        "alert carries a stop value.",
+    ] = None,
     session: Annotated[
         str | None, "Trading session: NORMAL (default), AM, PM, or SEAMLESS"
     ] = "NORMAL",
@@ -1390,15 +1398,38 @@ async def place_option_order(
     """
     Places a single-leg option order (MARKET, LIMIT) in one call.
     Params: account_hash, symbol, quantity, instruction (BUY_TO_OPEN/etc.), order_type.
-    Optional/Conditional: price (for LIMIT), session (default NORMAL), duration (default DAY).
+    Optional/Conditional: price (for LIMIT), stop_price (BUY_TO_OPEN LIMIT only —
+    converts the order into an entry + attached GTC stop), session (default
+    NORMAL), duration (default DAY).
     Validates the expiry date locally and previews with Schwab before
     submitting. *Write operation.*
     """
     _validate_option_expiry(symbol)
 
-    order_spec_dict = _prepare_option_order(
-        symbol, quantity, instruction, order_type, price, session, duration
-    )
+    if stop_price is not None:
+        if instruction.upper() != "BUY_TO_OPEN":
+            raise ValueError(
+                "stop_price can only be attached to BUY_TO_OPEN orders"
+            )
+        if order_type.upper() != "LIMIT" or price is None:
+            raise ValueError(
+                "stop_price requires a LIMIT order with a price "
+                "(reply 'price X' first to convert a market order)"
+            )
+        if stop_price >= price:
+            raise ValueError(
+                f"stop_price ({stop_price}) must be below the entry limit "
+                f"price ({price})"
+            )
+        entry_builder = option_buy_to_open_limit(symbol, quantity, price)
+        stop_builder = option_sell_to_close_stop(symbol, quantity, stop_price)
+        order_spec_dict = cast(
+            dict[str, Any], trigger_builder(entry_builder, stop_builder).build()
+        )
+    else:
+        order_spec_dict = _prepare_option_order(
+            symbol, quantity, instruction, order_type, price, session, duration
+        )
 
     await _run_preview_gate(ctx, account_hash, order_spec_dict)
 
