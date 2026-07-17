@@ -1272,9 +1272,17 @@ async def place_previewed_order(
         else "Approval request for order placement expired."
     )
     await ctx.warning(message)
-    if decision is ApprovalDecision.DENIED:
-        raise PermissionError(message)
-    raise TimeoutError(message)
+    # Structured terminal result instead of an exception — see the matching
+    # comment in _registration.py (_wrap_with_approval).
+    return {
+        "status": decision.value,
+        "message": message,
+        "final": True,
+        "note": (
+            "This is a FINAL human decision for this request. Do NOT retry, "
+            "re-place, or submit any alternative version of this order."
+        ),
+    }
 
 
 # ---------------------------------------------------------------------------

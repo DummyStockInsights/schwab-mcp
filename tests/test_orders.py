@@ -680,8 +680,8 @@ class TestPlacePreviewedOrder:
         assert result == {"location": "https://api.schwabapi.com/orders/123"}
         assert len(calls) == 1
 
-    def test_denied_raises_permission_error(self, monkeypatch, account_hash, order_spec):
-        """DENIED decision raises PermissionError."""
+    def test_denied_returns_final_result(self, monkeypatch, account_hash, order_spec):
+        """DENIED decision returns a structured terminal result."""
         from schwab_mcp.approvals import ApprovalDecision
         from schwab_mcp.tools import orders as orders_mod
 
@@ -694,11 +694,13 @@ class TestPlacePreviewedOrder:
 
         monkeypatch.setattr(orders_mod, "run_approval", fake_run_approval)
 
-        with pytest.raises(PermissionError, match="denied"):
-            run(orders.place_previewed_order(ctx, account_hash, preview_id))
+        result = run(orders.place_previewed_order(ctx, account_hash, preview_id))
+        assert result["status"] == "denied"
+        assert result["final"] is True
+        assert "Do NOT" in result["note"]
 
-    def test_expired_raises_timeout_error(self, monkeypatch, account_hash, order_spec):
-        """EXPIRED decision raises TimeoutError."""
+    def test_expired_returns_final_result(self, monkeypatch, account_hash, order_spec):
+        """EXPIRED decision returns a structured terminal result."""
         from schwab_mcp.approvals import ApprovalDecision
         from schwab_mcp.tools import orders as orders_mod
 
@@ -711,8 +713,9 @@ class TestPlacePreviewedOrder:
 
         monkeypatch.setattr(orders_mod, "run_approval", fake_run_approval)
 
-        with pytest.raises(TimeoutError, match="expired"):
-            run(orders.place_previewed_order(ctx, account_hash, preview_id))
+        result = run(orders.place_previewed_order(ctx, account_hash, preview_id))
+        assert result["status"] == "expired"
+        assert result["final"] is True
 
     def test_pop_before_approval_denied_consumes_entry(self, monkeypatch, account_hash, order_spec):
         """After a DENIED decision the entry is consumed; a second call raises ValueError."""
@@ -728,8 +731,8 @@ class TestPlacePreviewedOrder:
 
         monkeypatch.setattr(orders_mod, "run_approval", fake_run_approval)
 
-        with pytest.raises(PermissionError):
-            run(orders.place_previewed_order(ctx, account_hash, preview_id))
+        result = run(orders.place_previewed_order(ctx, account_hash, preview_id))
+        assert result["status"] == "denied"
 
         # Entry already consumed — must raise ValueError, not re-trigger approval
         with pytest.raises(ValueError, match="not found or expired"):
@@ -776,8 +779,8 @@ class TestPlacePreviewedOrder:
 
         monkeypatch.setattr(orders_mod, "run_approval", fake_run_approval)
 
-        with pytest.raises(PermissionError):
-            run(orders.place_previewed_order(ctx, account_hash, preview_id))
+        result = run(orders.place_previewed_order(ctx, account_hash, preview_id))
+        assert result["status"] == "denied"
 
         req = captured_request[0]
         assert req.tool_name == "place_previewed_order"

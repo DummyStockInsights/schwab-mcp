@@ -146,25 +146,28 @@ def test_write_tool_runs_when_approved() -> None:
     assert session.messages == []
 
 
-def test_write_tool_denied_raises_permission_error() -> None:
+def test_write_tool_denied_returns_final_result() -> None:
     ctx, approval_manager, session, _ = make_ctx(ApprovalDecision.DENIED)
     tool = wrapped_tool()
 
-    with pytest.raises(PermissionError):
-        await_result(tool(ctx, "spy"))
+    result = await_result(tool(ctx, "spy"))
 
+    assert result["status"] == "denied"
+    assert result["final"] is True
+    assert "Do NOT" in result["note"]
     assert len(approval_manager.requests) == 1
     assert len(session.messages) == 1
     assert session.messages[0]["level"] == "warning"
 
 
-def test_write_tool_timeout_raises_timeout_error() -> None:
+def test_write_tool_expired_returns_final_result() -> None:
     ctx, approval_manager, session, _ = make_ctx(ApprovalDecision.EXPIRED)
     tool = wrapped_tool()
 
-    with pytest.raises(TimeoutError):
-        await_result(tool(ctx, "spy"))
+    result = await_result(tool(ctx, "spy"))
 
+    assert result["status"] == "expired"
+    assert result["final"] is True
     assert len(approval_manager.requests) == 1
     assert len(session.messages) == 1
     assert session.messages[0]["level"] == "warning"

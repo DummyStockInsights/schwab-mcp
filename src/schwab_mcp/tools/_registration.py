@@ -263,9 +263,21 @@ def _wrap_with_approval(func: ToolFn) -> ToolFn:
         )
         await context.warning(message)
 
-        if decision is ApprovalDecision.DENIED:
-            raise PermissionError(message)
-        raise TimeoutError(message)
+        # Return a structured terminal result rather than raising: MCP hosts
+        # commonly wrap tool exceptions with retry-encouraging hints (e.g.
+        # "try a different approach"), which has caused LLM callers to
+        # re-place a human-denied order in an altered form. A normal result
+        # carrying an explicit finality note does not trigger that path.
+        return {
+            "status": decision.value,
+            "message": message,
+            "final": True,
+            "note": (
+                "This is a FINAL human decision for this request. Do NOT "
+                "retry, re-place, or submit any alternative version of this "
+                "order."
+            ),
+        }
 
     wrapper_globals = cast(dict[str, Any], getattr(wrapper, "__globals__", {}))
     module = inspect.getmodule(func)
