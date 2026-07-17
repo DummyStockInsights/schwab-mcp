@@ -38,6 +38,10 @@ def test_parse_edit_text_variants() -> None:
     assert parse("price: 1.95") == {"price": "1.95"}
     assert parse("qty 5 price 1.95") == {"quantity": "5", "price": "1.95"}
     assert parse("数量 5 价格 1.95") == {"quantity": "5", "price": "1.95"}
+    assert parse("stop 1.4") == {"stop_price": "1.4"}
+    assert parse("stop_price 1.4") == {"stop_price": "1.4"}
+    assert parse("止损 1.4") == {"stop_price": "1.4"}
+    assert parse("qty 5 stop 1.4") == {"quantity": "5", "stop_price": "1.4"}
     assert parse("hello world") == {}
 
 
@@ -91,6 +95,23 @@ def test_record_override_converts_market_to_limit() -> None:
     assert note == ""
 
 
+def test_validate_override_stop_price() -> None:
+    validate = TelegramApprovalManager._validate_override
+
+    bracket = make_request(
+        {"quantity": "8", "price": "1.81", "stop_price": "1.5"}
+    )
+    assert validate(bracket, "stop_price", "1.4") == (True, "")
+    ok, why = validate(bracket, "stop_price", "2.5")
+    assert not ok and "below the entry price" in why
+    ok, why = validate(bracket, "price", "1.4")
+    assert not ok and "above the stop_price" in why
+
+    plain = make_request({"quantity": "10", "price": "2.01"})
+    ok, why = validate(plain, "stop_price", "1.4")
+    assert not ok and "not part of this order" in why
+
+
 def test_format_arguments_shows_overrides() -> None:
     request = make_request({"quantity": "10", "price": "2.01"})
     rendered = TelegramApprovalManager._format_arguments(
@@ -142,13 +163,15 @@ def test_every_pilot_order_is_qty_and_price_editable(func, call_kwargs) -> None:
     or direction."""
     request = make_request(stringified_arguments(func, **call_kwargs))
 
-    assert TelegramApprovalManager._editable_keys(request) == [
-        "quantity",
-        "price",
-    ]
+    expected = ["quantity", "price"]
+    if "stop_price" in call_kwargs:
+        expected.append("stop_price")
+    assert TelegramApprovalManager._editable_keys(request) == expected
     validate = TelegramApprovalManager._validate_override
     assert validate(request, "quantity", "3") == (True, "")
-    assert validate(request, "price", "1.23") == (True, "")
+    # 9.99 stays above any stop_price in the fixtures, so the cross-field
+    # stop<price guard doesn't reject it
+    assert validate(request, "price", "9.99") == (True, "")
     assert "Reply to this message to adjust quantity/price" in (
         TelegramApprovalManager._build_pending_text(request)
     )

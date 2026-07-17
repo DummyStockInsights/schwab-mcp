@@ -31,8 +31,10 @@ _DENY = "deny"
 
 # Matches edit commands in replies, e.g. "qty 5", "quantity=5", "price: 1.95",
 # "数量 5 价格 1.95". Aliases map onto the canonical argument keys.
+# Longest alternatives first so "stop_price"/"stop" never partially match
+# as "price".
 _EDIT_PATTERN = re.compile(
-    r"(quantity|qty|price|数量|价格)\s*[=:]?\s*(\d+(?:\.\d+)?)",
+    r"(stop_price|stop|quantity|qty|price|数量|价格|止损)\s*[=:]?\s*(\d+(?:\.\d+)?)",
     re.IGNORECASE,
 )
 _EDIT_KEY_ALIASES = {
@@ -41,6 +43,9 @@ _EDIT_KEY_ALIASES = {
     "数量": "quantity",
     "price": "price",
     "价格": "price",
+    "stop": "stop_price",
+    "stop_price": "stop_price",
+    "止损": "stop_price",
 }
 
 
@@ -311,10 +316,20 @@ class TelegramApprovalManager(ApprovalManager):
     def _validate_override(
         request: ApprovalRequest, key: str, raw: str
     ) -> tuple[bool, str]:
-        if key not in ("quantity", "price"):
+        if key not in ("quantity", "price", "stop_price"):
             return False, "not editable"
         if key not in request.arguments:
             return False, "not part of this order"
+
+        def _effective(field: str) -> float | None:
+            raw_value = request.overrides.get(field) or request.arguments.get(field)
+            if raw_value is None:
+                return None
+            try:
+                return float(str(raw_value).strip("'\""))
+            except ValueError:
+                return None
+
         if key == "quantity":
             try:
                 quantity = int(raw)
@@ -329,6 +344,24 @@ class TelegramApprovalManager(ApprovalManager):
                 return False, "price must be a number"
             if price <= 0:
                 return False, "price must be positive"
+            stop = _effective("stop_price")
+            if stop is not None and stop >= price:
+                return False, (
+                    f"price must stay above the stop_price ({stop}) — "
+                    "adjust stop_price first if needed"
+                )
+        elif key == "stop_price":
+            try:
+                stop = float(raw)
+            except ValueError:
+                return False, "stop_price must be a number"
+            if stop <= 0:
+                return False, "stop_price must be positive"
+            entry = _effective("price")
+            if entry is not None and stop >= entry:
+                return False, (
+                    f"stop_price must be below the entry price ({entry})"
+                )
         return True, ""
 
     @staticmethod
@@ -388,7 +421,11 @@ class TelegramApprovalManager(ApprovalManager):
 
     @staticmethod
     def _editable_keys(request: ApprovalRequest) -> list[str]:
-        return [key for key in ("quantity", "price") if key in request.arguments]
+        return [
+            key
+            for key in ("quantity", "price", "stop_price")
+            if key in request.arguments
+        ]
 
     @staticmethod
     def _build_pending_text(request: ApprovalRequest) -> str:

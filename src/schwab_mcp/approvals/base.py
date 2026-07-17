@@ -23,6 +23,7 @@ class ApprovalDecision(str, Enum):
 EDITABLE_ARGUMENT_TYPES: Mapping[str, type] = {
     "quantity": int,
     "price": float,
+    "stop_price": float,
     "order_type": str,
 }
 
