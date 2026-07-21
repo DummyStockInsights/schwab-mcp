@@ -179,3 +179,82 @@ def test_stop_price_must_be_below_entry(order_response_factory) -> None:
             )
         )
     assert client.captured is None
+
+
+def test_entry_with_stop_defaults_target_to_1_3x(order_response_factory) -> None:
+    client = _client(order_response_factory)
+    ctx = make_ctx(client)
+    run(
+        orders.place_option_entry_with_stop(
+            ctx, "hash", _future_occ(), 8, price=1.81, stop_price=1.5
+        )
+    )
+    placed = client.captured["kwargs"]["order_spec"]
+    assert placed["orderStrategyType"] == "TRIGGER"
+    oco = placed["childOrderStrategies"][0]
+    assert oco["orderStrategyType"] == "OCO"
+    legs = oco["childOrderStrategies"]
+    types = sorted(leg["orderType"] for leg in legs)
+    assert types == ["LIMIT", "STOP"]
+    target_leg = next(leg for leg in legs if leg["orderType"] == "LIMIT")
+    assert float(target_leg["price"]) == round(1.81 * 1.3, 2)  # 2.35
+    assert all(leg["duration"] == "GOOD_TILL_CANCEL" for leg in legs)
+
+
+def test_entry_with_stop_honors_explicit_target(order_response_factory) -> None:
+    client = _client(order_response_factory)
+    ctx = make_ctx(client)
+    run(
+        orders.place_option_entry_with_stop(
+            ctx, "hash", _future_occ(), 8, price=1.81, stop_price=1.5,
+            target_price=3.0,
+        )
+    )
+    oco = client.captured["kwargs"]["order_spec"]["childOrderStrategies"][0]
+    target_leg = next(
+        leg for leg in oco["childOrderStrategies"] if leg["orderType"] == "LIMIT"
+    )
+    assert float(target_leg["price"]) == 3.0
+
+
+def test_entry_with_stop_rejects_target_below_entry(order_response_factory) -> None:
+    client = _client(order_response_factory)
+    ctx = make_ctx(client)
+    with pytest.raises(ValueError, match="above the entry"):
+        run(
+            orders.place_option_entry_with_stop(
+                ctx, "hash", _future_occ(), 8, price=1.81, stop_price=1.5,
+                target_price=1.6,
+            )
+        )
+    assert client.captured is None
+
+
+def test_plain_order_target_only_builds_single_exit(order_response_factory) -> None:
+    client = _client(order_response_factory)
+    ctx = make_ctx(client)
+    run(
+        orders.place_option_order(
+            ctx, "hash", _future_occ(), 5, "BUY_TO_OPEN", "LIMIT",
+            price=1.81, target_price=2.6,
+        )
+    )
+    placed = client.captured["kwargs"]["order_spec"]
+    assert placed["orderStrategyType"] == "TRIGGER"
+    child = placed["childOrderStrategies"][0]
+    assert child["orderType"] == "LIMIT"
+    assert child["duration"] == "GOOD_TILL_CANCEL"
+
+
+def test_plain_order_stop_and_target_builds_oco(order_response_factory) -> None:
+    client = _client(order_response_factory)
+    ctx = make_ctx(client)
+    run(
+        orders.place_option_order(
+            ctx, "hash", _future_occ(), 5, "BUY_TO_OPEN", "LIMIT",
+            price=1.81, stop_price=1.5, target_price=2.6,
+        )
+    )
+    oco = client.captured["kwargs"]["order_spec"]["childOrderStrategies"][0]
+    assert oco["orderStrategyType"] == "OCO"
+    assert len(oco["childOrderStrategies"]) == 2

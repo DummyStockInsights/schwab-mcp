@@ -24,6 +24,7 @@ EDITABLE_ARGUMENT_TYPES: Mapping[str, type] = {
     "quantity": int,
     "price": float,
     "stop_price": float,
+    "target_price": float,
     "order_type": str,
 }
 

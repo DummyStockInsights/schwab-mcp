@@ -213,6 +213,12 @@ def _wrap_with_approval(func: ToolFn) -> ToolFn:
         # obviously invalid orders (expired symbol, stop above entry) should
         # bounce straight back to the caller for self-correction instead of
         # appearing on the reviewer's phone.
+        prepare = getattr(func, "pre_approval_prepare", None)
+        if prepare is not None:
+            # May fill computed defaults (e.g. the 1.3x take-profit) so the
+            # reviewer sees and can edit the real values.
+            prepare(bound.arguments)
+
         validator = getattr(func, "pre_approval_validate", None)
         if validator is not None:
             validator(dict(bound.arguments))

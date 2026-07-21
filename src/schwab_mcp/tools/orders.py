@@ -1387,6 +1387,13 @@ async def place_option_order(
         "edits; automated callers should leave it unset unless the source "
         "alert carries a stop value.",
     ] = None,
+    target_price: Annotated[
+        float | None,
+        "Optional take-profit for BUY_TO_OPEN LIMIT orders: attaches a GTC "
+        "SELL_TO_CLOSE limit. With both stop_price and target_price the "
+        "exits form an OCO pair. Intended for the human reviewer to set "
+        "via approval edits; automated callers should leave it unset.",
+    ] = None,
     session: Annotated[
         str | None, "Trading session: NORMAL (default), AM, PM, or SEAMLESS"
     ] = "NORMAL",
@@ -1406,25 +1413,28 @@ async def place_option_order(
     """
     _validate_option_expiry(symbol)
 
-    if stop_price is not None:
+    if stop_price is not None or target_price is not None:
         if instruction.upper() != "BUY_TO_OPEN":
             raise ValueError(
-                "stop_price can only be attached to BUY_TO_OPEN orders"
+                "stop_price/target_price can only be attached to BUY_TO_OPEN orders"
             )
         if order_type.upper() != "LIMIT" or price is None:
             raise ValueError(
-                "stop_price requires a LIMIT order with a price "
+                "stop_price/target_price require a LIMIT order with a price "
                 "(reply 'price X' first to convert a market order)"
             )
-        if stop_price >= price:
+        if stop_price is not None and stop_price >= price:
             raise ValueError(
                 f"stop_price ({stop_price}) must be below the entry limit "
                 f"price ({price})"
             )
-        entry_builder = option_buy_to_open_limit(symbol, quantity, price)
-        stop_builder = option_sell_to_close_stop(symbol, quantity, stop_price)
-        order_spec_dict = cast(
-            dict[str, Any], trigger_builder(entry_builder, stop_builder).build()
+        if target_price is not None and target_price <= price:
+            raise ValueError(
+                f"target_price ({target_price}) must be above the entry limit "
+                f"price ({price})"
+            )
+        order_spec_dict = _build_protected_entry_spec(
+            symbol, quantity, price, stop_price, target_price
         )
     else:
         order_spec_dict = _prepare_option_order(
@@ -1450,27 +1460,41 @@ async def place_option_entry_with_stop(
     stop_price: Annotated[
         float, "Stop trigger price for the protective SELL_TO_CLOSE (per contract)"
     ],
+    target_price: Annotated[
+        float | None,
+        "Take-profit limit price (per contract). Defaults to 1.3x the entry "
+        "price when unset. Together with the stop it forms a GTC OCO pair "
+        "activated once the entry fills.",
+    ] = None,
 ) -> JSONType:
     """
-    Places a BUY_TO_OPEN limit entry that, once filled, automatically places a
-    good-till-cancel SELL_TO_CLOSE stop for the same quantity
-    (first-triggers-second). One approval covers both legs.
-    Params: account_hash, symbol, quantity, price (entry limit), stop_price (stop trigger).
-    The entry is a DAY limit order; the stop is GTC so protection survives
+    Places a BUY_TO_OPEN limit entry that, once filled, automatically places
+    a good-till-cancel OCO exit pair for the same quantity: a SELL_TO_CLOSE
+    stop and a SELL_TO_CLOSE take-profit limit (default 1.3x the entry
+    price) — whichever fills first cancels the other. One approval covers
+    all legs.
+    Params: account_hash, symbol, quantity, price (entry limit), stop_price
+    (stop trigger). Optional: target_price (take-profit; default 1.3x entry).
+    The entry is a DAY limit order; the exits are GTC so protection survives
     past the entry day. Validates the expiry date locally and previews with
     Schwab before submitting. *Write operation.*
     """
     _validate_option_expiry(symbol)
+    if target_price is None:
+        target_price = _default_target_price(price)
     if stop_price >= price:
         raise ValueError(
             f"stop_price ({stop_price}) must be below the entry limit price "
             f"({price}) for a long option entry"
         )
+    if target_price <= price:
+        raise ValueError(
+            f"target_price ({target_price}) must be above the entry limit "
+            f"price ({price})"
+        )
 
-    entry_builder = option_buy_to_open_limit(symbol, quantity, price)
-    stop_builder = option_sell_to_close_stop(symbol, quantity, stop_price)
-    trigger_order_dict = cast(
-        dict[str, Any], trigger_builder(entry_builder, stop_builder).build()
+    trigger_order_dict = _build_protected_entry_spec(
+        symbol, quantity, price, stop_price, target_price
     )
 
     await _run_preview_gate(ctx, account_hash, trigger_order_dict)
@@ -1481,6 +1505,42 @@ async def place_option_entry_with_stop(
         order_spec=trigger_order_dict,
         response_handler=_order_response_handler(ctx, account_hash),
     )
+
+
+def _default_target_price(price: float) -> float:
+    """Default take-profit for pilot opens: 1.3x the entry limit price."""
+    return round(price * 1.3, 2)
+
+
+def _build_protected_entry_spec(
+    symbol: str,
+    quantity: int,
+    price: float,
+    stop_price: float | None,
+    target_price: float | None,
+) -> dict[str, Any]:
+    """Entry limit order plus protective exits as a trigger order.
+
+    Exits are GTC. Two exits become an OCO pair (one fills, the other
+    cancels); a single exit attaches directly.
+    """
+    entry_builder = option_buy_to_open_limit(symbol, quantity, price)
+    exits = []
+    if stop_price is not None:
+        exits.append(option_sell_to_close_stop(symbol, quantity, stop_price))
+    if target_price is not None:
+        exits.append(
+            option_sell_to_close_limit(
+                symbol, quantity, target_price, duration=Duration.GOOD_TILL_CANCEL
+            )
+        )
+    if not exits:
+        raise ValueError("at least one of stop_price/target_price is required")
+    if len(exits) == 2:
+        exit_side = oco_builder(exits[0], exits[1])
+    else:
+        exit_side = exits[0]
+    return cast(dict[str, Any], trigger_builder(entry_builder, exit_side).build())
 
 
 def _validate_option_order_args(args: dict[str, Any]) -> None:
@@ -1494,22 +1554,40 @@ def _validate_option_order_args(args: dict[str, Any]) -> None:
     if isinstance(symbol, str):
         _validate_option_expiry(symbol)
     stop_price = args.get("stop_price")
-    if stop_price is not None:
+    target_price = args.get("target_price")
+    if stop_price is not None or target_price is not None:
         instruction = args.get("instruction")
         if isinstance(instruction, str) and instruction.upper() != "BUY_TO_OPEN":
-            raise ValueError("stop_price can only be attached to BUY_TO_OPEN orders")
+            raise ValueError(
+                "stop_price/target_price can only be attached to BUY_TO_OPEN orders"
+            )
         price = args.get("price")
         if price is None:
-            raise ValueError("stop_price requires a LIMIT order with a price")
-        if stop_price >= price:
+            raise ValueError(
+                "stop_price/target_price require a LIMIT order with a price"
+            )
+        if stop_price is not None and stop_price >= price:
             raise ValueError(
                 f"stop_price ({stop_price}) must be below the entry limit "
                 f"price ({price})"
             )
+        if target_price is not None and target_price <= price:
+            raise ValueError(
+                f"target_price ({target_price}) must be above the entry limit "
+                f"price ({price})"
+            )
+
+
+def _prepare_entry_with_stop_args(args: dict[str, Any]) -> None:
+    """Fill the default take-profit before the approval card is built, so
+    the reviewer sees (and can edit) the actual value that will be used."""
+    if args.get("target_price") is None and args.get("price") is not None:
+        args["target_price"] = _default_target_price(args["price"])
 
 
 place_option_order.pre_approval_validate = _validate_option_order_args  # type: ignore[attr-defined]
 place_option_entry_with_stop.pre_approval_validate = _validate_option_order_args  # type: ignore[attr-defined]
+place_option_entry_with_stop.pre_approval_prepare = _prepare_entry_with_stop_args  # type: ignore[attr-defined]
 
 
 _READ_ONLY_TOOLS = (

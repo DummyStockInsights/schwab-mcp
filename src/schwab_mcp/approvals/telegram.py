@@ -31,10 +31,11 @@ _DENY = "deny"
 
 # Matches edit commands in replies, e.g. "qty 5", "quantity=5", "price: 1.95",
 # "数量 5 价格 1.95". Aliases map onto the canonical argument keys.
-# Longest alternatives first so "stop_price"/"stop" never partially match
-# as "price".
+# Longest alternatives first so "stop_price"/"target_price"/"stop"/"target"
+# never partially match as "price".
 _EDIT_PATTERN = re.compile(
-    r"(stop_price|stop|quantity|qty|price|数量|价格|止损)\s*[=:]?\s*(\d+(?:\.\d+)?)",
+    r"(stop_price|target_price|quantity|target|stop|price|qty|tp|数量|价格|止损|止盈)"
+    r"\s*[=:]?\s*(\d+(?:\.\d+)?)",
     re.IGNORECASE,
 )
 _EDIT_KEY_ALIASES = {
@@ -46,6 +47,10 @@ _EDIT_KEY_ALIASES = {
     "stop": "stop_price",
     "stop_price": "stop_price",
     "止损": "stop_price",
+    "target": "target_price",
+    "target_price": "target_price",
+    "tp": "target_price",
+    "止盈": "target_price",
 }
 
 
@@ -316,7 +321,7 @@ class TelegramApprovalManager(ApprovalManager):
     def _validate_override(
         request: ApprovalRequest, key: str, raw: str
     ) -> tuple[bool, str]:
-        if key not in ("quantity", "price", "stop_price"):
+        if key not in ("quantity", "price", "stop_price", "target_price"):
             return False, "not editable"
         if key not in request.arguments:
             return False, "not part of this order"
@@ -350,8 +355,14 @@ class TelegramApprovalManager(ApprovalManager):
                     f"price must stay above the stop_price ({stop}) — "
                     "adjust stop_price first if needed"
                 )
+            target = _effective("target_price")
+            if target is not None and target <= price:
+                return False, (
+                    f"price must stay below the target_price ({target}) — "
+                    "adjust target_price first if needed"
+                )
         elif key == "stop_price":
-            if not TelegramApprovalManager._stop_editable(request):
+            if not TelegramApprovalManager._exit_editable(request, key):
                 return False, "stops can only be attached to opening buys"
             try:
                 stop = float(raw)
@@ -368,6 +379,25 @@ class TelegramApprovalManager(ApprovalManager):
             if stop >= entry:
                 return False, (
                     f"stop_price must be below the entry price ({entry})"
+                )
+        elif key == "target_price":
+            if not TelegramApprovalManager._exit_editable(request, key):
+                return False, "take-profits can only be attached to opening buys"
+            try:
+                target = float(raw)
+            except ValueError:
+                return False, "target_price must be a number"
+            if target <= 0:
+                return False, "target_price must be positive"
+            entry = _effective("price")
+            if entry is None:
+                return False, (
+                    "set a limit price first (reply 'price X') before "
+                    "attaching a take-profit"
+                )
+            if target <= entry:
+                return False, (
+                    f"target_price must be above the entry price ({entry})"
                 )
         return True, ""
 
@@ -428,13 +458,13 @@ class TelegramApprovalManager(ApprovalManager):
 
     @staticmethod
     @staticmethod
-    def _stop_editable(request: ApprovalRequest) -> bool:
-        """stop_price is only meaningful on opening buys.
+    def _exit_editable(request: ApprovalRequest, key: str) -> bool:
+        """stop_price/target_price are only meaningful on opening buys.
 
         entry_with_stop orders carry no instruction argument (implicitly
         BUY_TO_OPEN); plain option orders carry one and must be BUY_TO_OPEN.
         """
-        if "stop_price" not in request.arguments:
+        if key not in request.arguments:
             return False
         instruction = request.arguments.get("instruction")
         if instruction is None:
@@ -446,8 +476,9 @@ class TelegramApprovalManager(ApprovalManager):
         keys = [
             key for key in ("quantity", "price") if key in request.arguments
         ]
-        if TelegramApprovalManager._stop_editable(request):
-            keys.append("stop_price")
+        for key in ("stop_price", "target_price"):
+            if TelegramApprovalManager._exit_editable(request, key):
+                keys.append(key)
         return keys
 
     @staticmethod
@@ -472,6 +503,7 @@ class TelegramApprovalManager(ApprovalManager):
                 "quantity": "qty 5",
                 "price": "price 1.95",
                 "stop_price": "stop 1.45",
+                "target_price": "target 2.60",
             }
             example = " ".join(example_parts[key] for key in editable)
             lines.append(

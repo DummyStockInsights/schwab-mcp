@@ -112,6 +112,35 @@ def test_validate_override_stop_price() -> None:
     assert not ok and "not part of this order" in why
 
 
+def test_parse_target_aliases() -> None:
+    parse = TelegramApprovalManager._parse_edit_text
+    assert parse("target 2.6") == {"target_price": "2.6"}
+    assert parse("tp 2.6") == {"target_price": "2.6"}
+    assert parse("止盈 2.6") == {"target_price": "2.6"}
+    assert parse("target_price 2.6") == {"target_price": "2.6"}
+    assert parse("stop 1.4 target 2.6") == {
+        "stop_price": "1.4",
+        "target_price": "2.6",
+    }
+
+
+def test_validate_override_target_price() -> None:
+    validate = TelegramApprovalManager._validate_override
+    bracket = make_request(
+        {
+            "quantity": "8",
+            "price": "1.81",
+            "stop_price": "1.5",
+            "target_price": "2.35",
+        }
+    )
+    assert validate(bracket, "target_price", "2.6") == (True, "")
+    ok, why = validate(bracket, "target_price", "1.5")
+    assert not ok and "above the entry price" in why
+    ok, why = validate(bracket, "price", "2.5")
+    assert not ok and "below the target_price" in why
+
+
 def test_stop_edit_gated_by_instruction() -> None:
     validate = TelegramApprovalManager._validate_override
 
@@ -125,6 +154,7 @@ def test_stop_edit_gated_by_instruction() -> None:
     )
     assert validate(plain_buy, "stop_price", "1.4") == (True, "")
     assert "stop_price" in TelegramApprovalManager._editable_keys(plain_buy)
+    assert "target_price" not in TelegramApprovalManager._editable_keys(plain_buy)
 
     reduce_sell = make_request(
         {
@@ -204,7 +234,7 @@ def test_every_pilot_order_is_qty_and_price_editable(func, call_kwargs) -> None:
     expected = ["quantity", "price"]
     instruction = call_kwargs.get("instruction")
     if instruction is None or instruction == "BUY_TO_OPEN":
-        expected.append("stop_price")
+        expected.extend(["stop_price", "target_price"])
     assert TelegramApprovalManager._editable_keys(request) == expected
     validate = TelegramApprovalManager._validate_override
     assert validate(request, "quantity", "3") == (True, "")
