@@ -558,6 +558,7 @@ class TelegramApprovalManager(ApprovalManager):
         "order_type": "🧾",
         "price": "💵",
         "stop_price": "🛑",
+        "target_price": "🟢",
         "session": "🕒",
         "duration": "⏳",
         "trail_offset": "🎯",
