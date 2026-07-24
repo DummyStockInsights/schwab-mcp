@@ -4,6 +4,7 @@ import asyncio
 import html
 import logging
 import re
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import Mapping, Sequence
 
@@ -92,6 +93,9 @@ class TelegramApprovalManager(ApprovalManager):
         self._start_lock = asyncio.Lock()
         self._pending: dict[str, _PendingApproval] = {}
         self._lock = asyncio.Lock()
+        self._watchdog_task: asyncio.Task[None] | None = None
+        # How often the watchdog checks that long-polling is still running.
+        self._watchdog_interval = 30.0
 
     async def start(self) -> None:
         async with self._start_lock:
@@ -104,18 +108,57 @@ class TelegramApprovalManager(ApprovalManager):
             if updater is not None:
                 await updater.start_polling()
             self._started = True
+            if self._watchdog_task is None or self._watchdog_task.done():
+                self._watchdog_task = asyncio.ensure_future(self._watchdog_loop())
+
+    async def _watchdog_loop(self) -> None:
+        """Restart long-polling if it dies silently.
+
+        Observed in production: after a transient network error the PTB
+        updater's polling task can exit without recovering, leaving the
+        approval bot alive but deaf — cards go out but replies and button
+        taps never arrive. This loop detects a stopped updater and restarts
+        polling in place (no process restart needed).
+        """
+        while self._started:
+            try:
+                await asyncio.sleep(self._watchdog_interval)
+                updater = self._application.updater
+                if updater is None:
+                    continue
+                if not getattr(updater, "running", False):
+                    logger.warning(
+                        "Telegram updater not running — restarting long-polling"
+                    )
+                    try:
+                        await updater.start_polling()
+                        logger.info("Telegram long-polling restarted by watchdog")
+                    except Exception:
+                        logger.exception(
+                            "Watchdog failed to restart Telegram long-polling"
+                        )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Telegram approval watchdog iteration failed")
 
     async def stop(self) -> None:
         async with self._start_lock:
             if not self._started:
                 return
 
+            self._started = False
+            if self._watchdog_task is not None:
+                self._watchdog_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await self._watchdog_task
+                self._watchdog_task = None
+
             updater = self._application.updater
             if updater is not None:
                 await updater.stop()
             await self._application.stop()
             await self._application.shutdown()
-            self._started = False
 
     @staticmethod
     def _build_keyboard(request_id: str) -> InlineKeyboardMarkup:
