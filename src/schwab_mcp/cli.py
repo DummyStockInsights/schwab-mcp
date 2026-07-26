@@ -1,5 +1,6 @@
 """Click CLI commands for schwab-mcp: auth, server, save-credentials."""
 
+import logging
 import os
 import sys
 
@@ -24,6 +25,14 @@ TOKEN_MAX_AGE_SECONDS = schwab_auth.DEFAULT_MAX_TOKEN_AGE_SECONDS
 @click.group()
 def cli():
     """Schwab Model Context Protocol CLI."""
+    # python-telegram-bot talks to the API through httpx, and httpx logs the full
+    # request URL at INFO — which embeds the bot token:
+    #   POST https://api.telegram.org/bot<token>/sendMessage "HTTP/1.1 200 OK"
+    # This process runs as an MCP subprocess, so its stderr is captured by the
+    # host (journald under systemd, log files under launchd). Left at INFO, every
+    # approval round writes the token to disk in cleartext.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
 @cli.command("auth")
