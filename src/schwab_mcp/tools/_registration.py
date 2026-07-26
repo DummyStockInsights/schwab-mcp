@@ -221,7 +221,17 @@ def _wrap_with_approval(func: ToolFn) -> ToolFn:
 
         validator = getattr(func, "pre_approval_validate", None)
         if validator is not None:
-            validator(dict(bound.arguments))
+            # Validators taking a second parameter also get the context, so they
+            # can check against live Schwab data (e.g. "does this contract even
+            # exist?"). Sync one-arg validators keep working unchanged.
+            takes_context = len(inspect.signature(validator).parameters) >= 2
+            result = (
+                validator(dict(bound.arguments), context)
+                if takes_context
+                else validator(dict(bound.arguments))
+            )
+            if inspect.isawaitable(result):
+                await result
 
         arguments = {name: _format_argument(arg) for name, arg in bound.arguments.items() if name not in ctx_params}
 

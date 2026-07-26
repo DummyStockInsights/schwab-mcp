@@ -1,6 +1,7 @@
 """Order placement, management, and preview tools for the Schwab MCP server."""
 
 import datetime
+import logging
 import re
 import uuid
 from zoneinfo import ZoneInfo
@@ -44,6 +45,8 @@ from schwab_mcp.tools.order_helpers import (
     option_sell_to_open_market,
 )
 from schwab_mcp.tools.utils import JSONType, ResponseHandler, SchwabAPIError, call, parse_date
+
+logger = logging.getLogger(__name__)
 
 _COMPACT_ORDER_TOP_FIELDS = frozenset(
     {
@@ -1585,8 +1588,63 @@ def _prepare_entry_with_stop_args(args: dict[str, Any]) -> None:
         args["target_price"] = _default_target_price(args["price"])
 
 
-place_option_order.pre_approval_validate = _validate_option_order_args  # type: ignore[attr-defined]
-place_option_entry_with_stop.pre_approval_validate = _validate_option_order_args  # type: ignore[attr-defined]
+async def _assert_option_contract_exists(symbol: str, context: Any) -> None:
+    """Reject OCC symbols Schwab has never heard of.
+
+    The model builds the OCC symbol itself: root padded to 6, YYMMDD, C/P,
+    then strike x 1000 zero-padded to 8. A magnitude slip in that last field
+    still yields a *syntactically valid* symbol for a different contract —
+    $16.5 encoded as 00165000 ($165) instead of 00016500. The expiry guard
+    above catches mis-built year digits; this catches mis-built strikes.
+
+    Schwab's quote endpoint is the cheapest authoritative existence check: a
+    real contract comes back keyed by its own symbol, an invented one lands
+    under "errors". Unlike a strike-vs-underlying ratio heuristic, this has no
+    false positives — a legitimately deep-OTM lotto contract still quotes.
+
+    Transport failures fail OPEN (matching the Schwab preview gate): a network
+    blip must not block trading, and the preview still validates downstream.
+    """
+    try:
+        response = await context.client.get_quotes([symbol])
+        payload = response.json()
+    except Exception as exc:  # noqa: BLE001 - deliberately fail open
+        logger.warning(
+            "Could not verify option contract %s exists (%s); allowing the order "
+            "to proceed to Schwab's own preview validation.",
+            symbol,
+            exc,
+        )
+        return
+
+    entry = payload.get(symbol) if isinstance(payload, dict) else None
+    if isinstance(entry, dict) and entry.get("quote"):
+        return
+
+    raise ValueError(
+        f"Option symbol {symbol!r} does not exist at Schwab — no quote is "
+        "available for it. The strike digits are the likely culprit: the OCC "
+        "strike field is (strike price x 1000) zero-padded to 8 digits, so "
+        "$16.5 is 00016500, not 00165000. Rebuild the symbol and retry."
+    )
+
+
+async def _validate_option_order_preapproval(args: dict[str, Any], context: Any) -> None:
+    """Pre-approval gate for the option fast-path tools.
+
+    Wraps the synchronous argument checks and adds the contract-existence
+    check, which needs live Schwab data. Runs before the reviewer is pinged,
+    so a mis-built symbol bounces back for self-correction instead of showing
+    up on the approval card looking legitimate.
+    """
+    _validate_option_order_args(args)
+    symbol = args.get("symbol")
+    if isinstance(symbol, str):
+        await _assert_option_contract_exists(symbol, context)
+
+
+place_option_order.pre_approval_validate = _validate_option_order_preapproval  # type: ignore[attr-defined]
+place_option_entry_with_stop.pre_approval_validate = _validate_option_order_preapproval  # type: ignore[attr-defined]
 place_option_entry_with_stop.pre_approval_prepare = _prepare_entry_with_stop_args  # type: ignore[attr-defined]
 
 
