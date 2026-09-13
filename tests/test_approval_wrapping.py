@@ -84,6 +84,15 @@ async def sample_write_tool(ctx: SchwabContext, symbol: str) -> str:
     return symbol.upper()
 
 
+async def sample_source_tool(
+    ctx: SchwabContext,
+    symbol: str,
+    source: str | None = None,
+) -> dict:
+    """Mirrors the real order tools, which accept an approval-card label."""
+    return {"symbol": symbol, "source": source}
+
+
 async def sample_order_tool(
     ctx: SchwabContext,
     symbol: str,
@@ -107,6 +116,47 @@ def wrapped_tool():
 def wrapped_order_tool():
     ensured = _registration._ensure_schwab_context(sample_order_tool)
     return _registration._wrap_with_approval(ensured)
+
+
+def wrapped_source_tool():
+    ensured = _registration._ensure_schwab_context(sample_source_tool)
+    return _registration._wrap_with_approval(ensured)
+
+
+def test_source_lands_on_request_and_leaves_the_arguments() -> None:
+    """`source` labels the approval card; it must not look like an order field."""
+    ctx, approval_manager, _, _ = make_ctx(ApprovalDecision.APPROVED)
+    tool = wrapped_source_tool()
+
+    result = await_result(tool(ctx, "spy", source="Ashley"))
+
+    assert len(approval_manager.requests) == 1
+    request = approval_manager.requests[0]
+    assert request.source == "Ashley"
+    assert "source" not in request.arguments
+    assert request.arguments["symbol"] == "'spy'"
+    # The tool still runs, and simply receives the default for the popped key.
+    assert result == {"symbol": "spy", "source": None}
+
+
+def test_source_absent_leaves_request_unset() -> None:
+    ctx, approval_manager, _, _ = make_ctx(ApprovalDecision.APPROVED)
+    tool = wrapped_source_tool()
+
+    await_result(tool(ctx, "spy"))
+
+    request = approval_manager.requests[0]
+    assert request.source is None
+    assert "source" not in request.arguments
+
+
+def test_blank_source_is_normalised_to_none() -> None:
+    ctx, approval_manager, _, _ = make_ctx(ApprovalDecision.APPROVED)
+    tool = wrapped_source_tool()
+
+    await_result(tool(ctx, "spy", source="   "))
+
+    assert approval_manager.requests[0].source is None
 
 
 class OverridingApprovalManager(ApprovalManager):

@@ -4,7 +4,7 @@ import inspect
 
 import pytest
 
-from schwab_mcp.approvals import ApprovalRequest
+from schwab_mcp.approvals import ApprovalDecision, ApprovalRequest
 from schwab_mcp.approvals.telegram import TelegramApprovalManager
 from schwab_mcp.tools import orders
 
@@ -21,14 +21,49 @@ def stringified_arguments(func, /, **values) -> dict[str, str]:
     }
 
 
-def make_request(arguments: dict[str, str]) -> ApprovalRequest:
+def make_request(
+    arguments: dict[str, str], *, source: str | None = None
+) -> ApprovalRequest:
     return ApprovalRequest(
         id="req",
         tool_name="place_option_order",
         request_id="1",
         client_id=None,
         arguments=arguments,
+        source=source,
     )
+
+
+def test_pending_text_shows_source_under_the_header() -> None:
+    text = TelegramApprovalManager._build_pending_text(
+        make_request({"symbol": "'SPY   260918C00750000'"}, source="Ashley")
+    )
+    lines = text.splitlines()
+    assert lines[0] == "⚠️ Write operation requires approval"
+    assert lines[1] == "📣 Source: Ashley"
+
+
+def test_pending_text_omits_source_line_when_unset() -> None:
+    text = TelegramApprovalManager._build_pending_text(
+        make_request({"symbol": "'SPY   260918C00750000'"})
+    )
+    assert "📣" not in text
+    assert text.splitlines()[1].startswith("🔧 Tool:")
+
+
+def test_source_is_html_escaped_on_the_card() -> None:
+    text = TelegramApprovalManager._build_pending_text(
+        make_request({"symbol": "'F'"}, source="<b>Ash & Co</b>")
+    )
+    assert "📣 Source: &lt;b&gt;Ash &amp; Co&lt;/b&gt;" in text
+
+
+def test_decision_text_shows_source() -> None:
+    request = make_request({"symbol": "'F'"}, source="Angela")
+    text = TelegramApprovalManager._build_decision_text(
+        request, ApprovalDecision.DENIED, actor=None, reason=None
+    )
+    assert "📣 Source: Angela" in text
 
 
 def test_parse_edit_text_variants() -> None:

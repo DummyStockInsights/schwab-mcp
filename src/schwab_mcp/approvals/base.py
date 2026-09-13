@@ -38,6 +38,11 @@ class ApprovalRequest:
     request_id: str
     client_id: str | None
     arguments: Mapping[str, str]
+    # Caller-supplied provenance label ("Ashley", "Angela", …): which alert
+    # source produced this order. Purely informational — it is shown on the
+    # approval card so a reviewer can tell several alert streams apart on one
+    # shared account, and is never sent to Schwab.
+    source: str | None = None
     # Reviewer-supplied value overrides (raw strings, keyed per
     # EDITABLE_ARGUMENT_TYPES). Approval managers may fill this in before
     # resolving APPROVED; the write wrapper applies them to the actual call.

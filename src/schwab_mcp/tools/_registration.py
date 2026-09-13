@@ -233,6 +233,12 @@ def _wrap_with_approval(func: ToolFn) -> ToolFn:
             if inspect.isawaitable(result):
                 await result
 
+        # Provenance label: which alert source produced this order. Pulled out
+        # of the arguments so it renders as its own line on the approval card
+        # rather than sitting among the order fields, and so it never reaches
+        # the order body. Absent -> the card simply omits the line.
+        source = bound.arguments.pop("source", None)
+
         arguments = {name: _format_argument(arg) for name, arg in bound.arguments.items() if name not in ctx_params}
 
         raw_hash = bound.arguments.get("account_hash")
@@ -249,14 +255,16 @@ def _wrap_with_approval(func: ToolFn) -> ToolFn:
             request_id=context.request_id,
             client_id=context.client_id,
             arguments=arguments,
+            source=source if isinstance(source, str) and source.strip() else None,
         )
 
         decision = await run_approval(context, request)
         logger.info(
-            "Approval decision %s for tool '%s' (approval_id=%s, client_id=%s, request_id=%s, overrides=%s)",
+            "Approval decision %s for tool '%s' (approval_id=%s, source=%s, client_id=%s, request_id=%s, overrides=%s)",
             decision.value,
             func.__name__,
             request.id,
+            request.source or "<none>",
             request.client_id or "<unknown>",
             request.request_id,
             request.overrides or "<none>",

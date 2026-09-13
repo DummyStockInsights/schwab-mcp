@@ -226,6 +226,8 @@ class DiscordApprovalManager(ApprovalManager):
         )
         embed.add_field(name="Request ID", value=request.request_id, inline=False)
         embed.add_field(name="Approval ID", value=request.id, inline=False)
+        if request.source:
+            embed.add_field(name="📣 Source", value=request.source, inline=False)
         if request.client_id:
             embed.add_field(name="Client ID", value=request.client_id, inline=False)
         if request.arguments:
@@ -253,6 +255,8 @@ class DiscordApprovalManager(ApprovalManager):
         )
         embed.add_field(name="Request ID", value=request.request_id, inline=False)
         embed.add_field(name="Approval ID", value=request.id, inline=False)
+        if request.source:
+            embed.add_field(name="📣 Source", value=request.source, inline=False)
         if request.client_id:
             embed.add_field(name="Client ID", value=request.client_id, inline=False)
         if request.arguments:

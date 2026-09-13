@@ -528,9 +528,15 @@ class TelegramApprovalManager(ApprovalManager):
     def _build_pending_text(request: ApprovalRequest) -> str:
         lines = [
             "⚠️ Write operation requires approval",
-            f"🔧 Tool: {html.escape(request.tool_name)}",
-            f"🆔 Request ID: {html.escape(request.request_id)}",
         ]
+        if request.source:
+            lines.append(f"📣 Source: {html.escape(request.source)}")
+        lines.extend(
+            [
+                f"🔧 Tool: {html.escape(request.tool_name)}",
+                f"🆔 Request ID: {html.escape(request.request_id)}",
+            ]
+        )
         if request.client_id:
             lines.append(f"💻 Client ID: {html.escape(request.client_id)}")
         if request.arguments:
@@ -568,9 +574,15 @@ class TelegramApprovalManager(ApprovalManager):
         emoji = TelegramApprovalManager._emoji_for_decision(decision)
         lines = [
             f"{emoji} Write operation {decision.value}",
-            f"🔧 Tool: {html.escape(request.tool_name)}",
-            f"🆔 Request ID: {html.escape(request.request_id)}",
         ]
+        if request.source:
+            lines.append(f"📣 Source: {html.escape(request.source)}")
+        lines.extend(
+            [
+                f"🔧 Tool: {html.escape(request.tool_name)}",
+                f"🆔 Request ID: {html.escape(request.request_id)}",
+            ]
+        )
         if request.client_id:
             lines.append(f"💻 Client ID: {html.escape(request.client_id)}")
         if request.arguments:

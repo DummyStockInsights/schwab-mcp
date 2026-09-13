@@ -791,8 +791,14 @@ async def cancel_order(
     ctx: SchwabContext,
     account_hash: Annotated[str, "Account hash for the Schwab account"],
     order_id: Annotated[str, "Order ID to cancel"],
+    source: Annotated[
+        str | None,
+        "Optional provenance label shown on the approval card: which alert "
+        "source triggered this cancel (e.g. 'Ashley'). Informational only for "
+        "the human reviewer — never sent to Schwab.",
+    ] = None,
 ) -> JSONType:
-    """Cancels a pending order. Cannot cancel executed/terminal orders. Params: account_hash, order_id. Returns updated order details (compact/pruned, same shape as get_order) after cancellation; falls back to a minimal {orderId, status, note} payload if the post-cancel status fetch fails or returns no data. *Write operation.*"""
+    """Cancels a pending order. Cannot cancel executed/terminal orders. Params: account_hash, order_id, source (approval-card label only). Returns updated order details (compact/pruned, same shape as get_order) after cancellation; falls back to a minimal {orderId, status, note} payload if the post-cancel status fetch fails or returns no data. *Write operation.*"""
     client = ctx.orders
     await call(client.cancel_order, order_id=order_id, account_hash=account_hash)
     fallback: JSONType = {
@@ -1404,6 +1410,12 @@ async def place_option_order(
         str | None,
         "Order duration: DAY (default), GOOD_TILL_CANCEL, FILL_OR_KILL (Limit only)",
     ] = "DAY",
+    source: Annotated[
+        str | None,
+        "Optional provenance label shown on the approval card: which alert "
+        "source produced this order (e.g. 'Ashley'). Informational only for the "
+        "human reviewer — never sent to Schwab.",
+    ] = None,
 ) -> JSONType:
     """
     Places a single-leg option order (MARKET, LIMIT) in one call.
@@ -1411,6 +1423,8 @@ async def place_option_order(
     Optional/Conditional: price (for LIMIT), stop_price (BUY_TO_OPEN LIMIT only —
     converts the order into an entry + attached GTC stop), session (default
     NORMAL), duration (default DAY).
+    `source` only labels the approval card (e.g. which trader the alert came
+    from); it is not part of the order.
     Validates the expiry date locally and previews with Schwab before
     submitting. *Write operation.*
     """
@@ -1469,6 +1483,12 @@ async def place_option_entry_with_stop(
         "price when unset. Together with the stop it forms a GTC OCO pair "
         "activated once the entry fills.",
     ] = None,
+    source: Annotated[
+        str | None,
+        "Optional provenance label shown on the approval card: which alert "
+        "source produced this order (e.g. 'Ashley'). Informational only for the "
+        "human reviewer — never sent to Schwab.",
+    ] = None,
 ) -> JSONType:
     """
     Places a BUY_TO_OPEN limit entry that, once filled, automatically places
@@ -1477,7 +1497,8 @@ async def place_option_entry_with_stop(
     price) — whichever fills first cancels the other. One approval covers
     all legs.
     Params: account_hash, symbol, quantity, price (entry limit), stop_price
-    (stop trigger). Optional: target_price (take-profit; default 1.3x entry).
+    (stop trigger). Optional: target_price (take-profit; default 1.3x entry),
+    source (approval-card label only, e.g. which trader the alert came from).
     The entry is a DAY limit order; the exits are GTC so protection survives
     past the entry day. Validates the expiry date locally and previews with
     Schwab before submitting. *Write operation.*
