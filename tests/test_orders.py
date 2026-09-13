@@ -510,6 +510,34 @@ class TestPlacePreviewedOrder:
             "BUY 100 AAPL LIMIT @ $150.00",
         )
 
+    def test_source_lands_on_request_not_in_arguments(self, monkeypatch, account_hash, order_spec):
+        """The equity path builds its own ApprovalRequest, so it needs its own
+        check that `source` reaches the card and stays out of the arguments."""
+        from schwab_mcp.approvals import ApprovalDecision
+        from schwab_mcp.tools import orders as orders_mod
+
+        client = DummyPreviewClient()
+        ctx = make_ctx(client)
+        preview_id = self._put_entry(ctx, account_hash, order_spec)
+
+        seen: list = []
+
+        async def fake_call(func, *args, **kwargs):
+            return {"orderId": 42, "accountHash": account_hash}
+
+        async def fake_run_approval(ctx, request):
+            seen.append(request)
+            return ApprovalDecision.DENIED
+
+        monkeypatch.setattr(orders_mod, "call", fake_call)
+        monkeypatch.setattr(orders_mod, "run_approval", fake_run_approval)
+
+        run(orders.place_previewed_order(ctx, account_hash, preview_id, source="Angela"))
+
+        assert len(seen) == 1
+        assert seen[0].source == "Angela"
+        assert "source" not in seen[0].arguments
+
     def test_approved_submits_cached_spec(self, monkeypatch, account_hash, order_spec):
         """Happy path: approved decision calls place_order with the exact cached
         spec, then fetches and returns the placed order's details."""

@@ -1225,12 +1225,20 @@ async def place_previewed_order(
     ctx: SchwabContext,
     account_hash: Annotated[str, "Account hash for the Schwab account"],
     preview_id: Annotated[str, "Preview ID returned by a preview_* tool"],
+    source: Annotated[
+        str | None,
+        "Optional provenance label shown on the approval card: which alert "
+        "source produced this order (e.g. 'Angela'). Informational only for the "
+        "human reviewer — never sent to Schwab.",
+    ] = None,
 ) -> JSONType:
     """Places a previously previewed order using its exact cached order
     specification (no re-derivation from parameters). Call a preview_*
     tool first to get a preview_id, review the projected order details,
     then call this tool to execute. Previews expire after 10 minutes and
-    are single-use. Returns updated order details (compact/pruned, same
+    are single-use. `source` only labels the approval card (e.g. which trader
+    the alert came from); it is not part of the order.
+    Returns updated order details (compact/pruned, same
     shape as get_order) after placement; falls back to a minimal
     {orderId, accountHash, note} payload if the post-placement status fetch
     fails or returns no data. *Write operation.*
@@ -1248,6 +1256,7 @@ async def place_previewed_order(
             "preview_id": preview_id,
             "account_hash": account_hash,
         },
+        source=source.strip() if isinstance(source, str) and source.strip() else None,
     )
 
     decision = await run_approval(ctx, request)
