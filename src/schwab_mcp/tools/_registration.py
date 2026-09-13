@@ -273,8 +273,20 @@ def _wrap_with_approval(func: ToolFn) -> ToolFn:
             applied_overrides: dict[str, Any] = {}
             for key, raw in request.overrides.items():
                 caster = EDITABLE_ARGUMENT_TYPES.get(key)
-                if caster is None or key not in bound.arguments:
+                if caster is None:
                     continue
+                # A reviewer may attach an optional argument the caller never
+                # passed. The no-stop entry path deliberately leaves stop_price
+                # (and target_price) unbound — place_option_order is called
+                # without them — and the reviewer is expected to be able to add
+                # one by replying "stop 1.20" at approval. Materialise the
+                # parameter's default first so the override has somewhere to
+                # land; without this the reply is silently dropped.
+                if key not in bound.arguments:
+                    parameter = signature.parameters.get(key)
+                    if parameter is None or parameter.default is inspect.Parameter.empty:
+                        continue
+                    bound.arguments[key] = parameter.default
                 try:
                     bound.arguments[key] = caster(raw)
                 except (TypeError, ValueError):

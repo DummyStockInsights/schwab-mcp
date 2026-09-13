@@ -93,6 +93,23 @@ async def sample_source_tool(
     return {"symbol": symbol, "source": source}
 
 
+async def sample_stop_tool(
+    ctx: SchwabContext,
+    symbol: str,
+    quantity: int,
+    price: float | None = None,
+    stop_price: float | None = None,
+) -> dict:
+    """Mirrors place_option_order: the stop is optional, so a no-stop alert
+    calls this tool WITHOUT ever binding stop_price."""
+    return {
+        "symbol": symbol,
+        "quantity": quantity,
+        "price": price,
+        "stop_price": stop_price,
+    }
+
+
 async def sample_order_tool(
     ctx: SchwabContext,
     symbol: str,
@@ -121,6 +138,30 @@ def wrapped_order_tool():
 def wrapped_source_tool():
     ensured = _registration._ensure_schwab_context(sample_source_tool)
     return _registration._wrap_with_approval(ensured)
+
+
+def wrapped_stop_tool():
+    ensured = _registration._ensure_schwab_context(sample_stop_tool)
+    return _registration._wrap_with_approval(ensured)
+
+
+def test_reviewer_can_add_a_stop_the_caller_omitted() -> None:
+    """The human must be able to attach a stop the alert never carried.
+
+    A no-stop alert deliberately calls place_option_order WITHOUT stop_price,
+    and the reviewer is then expected to be able to add one by replying
+    "stop 1.20" to the approval card. Because overrides are applied only to
+    keys already present in the bound arguments, an omitted optional argument
+    must be tolerated rather than silently dropped.
+    """
+    manager = OverridingApprovalManager({"stop_price": "1.20"})
+    ctx = make_ctx_with_manager(manager)
+    tool = wrapped_stop_tool()
+
+    result = await_result(tool(ctx, "spy", 10, price=1.51))
+
+    assert result["applied_overrides"] == {"stop_price": 1.2}
+    assert result["order_result"]["stop_price"] == 1.2
 
 
 def test_source_lands_on_request_and_leaves_the_arguments() -> None:
