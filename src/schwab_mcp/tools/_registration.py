@@ -239,6 +239,23 @@ def _wrap_with_approval(func: ToolFn) -> ToolFn:
         # the order body. Absent -> the card simply omits the line.
         source = bound.arguments.pop("source", None)
 
+        # Materialise the tool's editable optional parameters before the card is
+        # built. The approval layer decides what a reviewer may edit purely by
+        # looking at the keys present here (`_editable_keys`, `_validate_override`,
+        # `_exit_editable`), and `bind_partial` never applies defaults — so a
+        # caller that omits an optional argument makes it invisible AND
+        # uneditable. That is exactly the no-stop entry path: place_option_order
+        # is deliberately called WITHOUT stop_price/target_price, and the
+        # reviewer is then supposed to be able to add one by replying
+        # "stop 1.20". Present-with-default keeps the card honest about which
+        # fields exist and can be changed.
+        for editable_key in EDITABLE_ARGUMENT_TYPES:
+            if editable_key in bound.arguments or editable_key in ctx_params:
+                continue
+            editable_param = signature.parameters.get(editable_key)
+            if editable_param is not None and editable_param.default is not inspect.Parameter.empty:
+                bound.arguments[editable_key] = editable_param.default
+
         arguments = {name: _format_argument(arg) for name, arg in bound.arguments.items() if name not in ctx_params}
 
         raw_hash = bound.arguments.get("account_hash")

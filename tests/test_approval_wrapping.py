@@ -150,9 +150,9 @@ def test_reviewer_can_add_a_stop_the_caller_omitted() -> None:
 
     A no-stop alert deliberately calls place_option_order WITHOUT stop_price,
     and the reviewer is then expected to be able to add one by replying
-    "stop 1.20" to the approval card. Because overrides are applied only to
-    keys already present in the bound arguments, an omitted optional argument
-    must be tolerated rather than silently dropped.
+    "stop 1.20" to the approval card. The approval layer decides what is
+    editable from the arguments it can see, so an omitted optional argument
+    has to be surfaced with its default rather than left absent.
     """
     manager = OverridingApprovalManager({"stop_price": "1.20"})
     ctx = make_ctx_with_manager(manager)
@@ -160,6 +160,9 @@ def test_reviewer_can_add_a_stop_the_caller_omitted() -> None:
 
     result = await_result(tool(ctx, "spy", 10, price=1.51))
 
+    # Visible on the card, so the reviewer knows the field exists ...
+    assert manager.requests[0].arguments["stop_price"] == "None"
+    # ... and the reply actually takes effect.
     assert result["applied_overrides"] == {"stop_price": 1.2}
     assert result["order_result"]["stop_price"] == 1.2
 

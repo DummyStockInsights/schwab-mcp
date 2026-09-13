@@ -312,3 +312,43 @@ def test_pending_text_includes_edit_hint() -> None:
     no_args = make_request({"symbol": "'F'"})
     text = TelegramApprovalManager._build_pending_text(no_args)
     assert "Reply to this message" not in text
+
+
+def test_stop_can_be_added_to_an_entry_that_shipped_without_one() -> None:
+    """A no-stop entry reaches the card with stop_price already present (as the
+    literal string "None"), so the reviewer's reply must be accepted rather
+    than rejected as "not part of this order".
+
+    Mirrors the real call: an Ashley no-stop alert goes through
+    place_option_order, which carries instruction/order_type and a limit price
+    but no stop.
+    """
+    request = make_request(
+        {
+            "symbol": "'DELL  260918C00570000'",
+            "quantity": "1",
+            "instruction": "'BUY_TO_OPEN'",
+            "order_type": "'LIMIT'",
+            "price": "18.16",
+            "stop_price": "None",
+            "target_price": "None",
+        }
+    )
+    validate = TelegramApprovalManager._validate_override
+
+    assert "stop_price" in TelegramApprovalManager._editable_keys(request)
+    assert validate(request, "stop_price", "15") == (True, "")
+    assert validate(request, "target_price", "25") == (True, "")
+
+    # Cross-field guards still apply to the newly attached stop.
+    assert validate(request, "stop_price", "20")[0] is False
+
+
+def test_stop_is_still_rejected_when_the_request_has_no_stop_field() -> None:
+    """The relaxation must not invent editability for tools that never carry a
+    stop (e.g. cancel_order)."""
+    request = make_request({"order_id": "'42'", "account": "40343803"})
+    validate = TelegramApprovalManager._validate_override
+
+    assert validate(request, "stop_price", "15") == (False, "not part of this order")
+    assert TelegramApprovalManager._editable_keys(request) == []
